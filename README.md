@@ -33,7 +33,7 @@ For any issues or enhancement requests with this plugin, please contact the Unif
 
 ## 1. Download Plugin from GitHub
 
-- Visit the GitHub repository for the Unified Payment Gateway plugin at [GitHub Repository URL](https://github.com/Cooraez12/unified-payment-gateway).
+- Visit the GitHub repository for the Unified Payment Gateway plugin at [GitHub Repository URL](https://github.com/bytenft/unified-payment-gateway).
 - Download the plugin ZIP file to your local machine.
 
 ## 2. Install the Plugin in WordPress
