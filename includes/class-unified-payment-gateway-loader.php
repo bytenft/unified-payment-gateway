@@ -1,0 +1,1055 @@
+<?php
+if (!defined('ABSPATH')) {
+	exit; // Exit if accessed directly.
+}
+
+// Include the configuration file
+require_once plugin_dir_path(__FILE__) . 'config.php';
+require_once plugin_dir_path(__FILE__) . 'class-unified-payment-state-engine.php';
+require_once plugin_dir_path(__FILE__) . 'class-unified-payment-logger.php';
+/**
+ * Class UNIFIED_PAYMENT_GATEWAY_Loader
+ * Handles the loading and initialization of the Unified Payment Gateway plugin.
+ */
+class UNIFIED_PAYMENT_GATEWAY_Loader
+{
+	private static $instance = null;
+	private $admin_notices;
+
+	private $base_url;
+
+	/**
+	 * Get the singleton instance of this class.
+	 * @return UNIFIED_PAYMENT_GATEWAY_Loader
+	 */
+	public static function get_instance()
+	{
+		if (null === self::$instance) {
+			self::$instance = new self();
+		}
+		return self::$instance;
+	}
+
+
+	/**
+	 * Constructor. Sets up actions and hooks.
+	 */
+	private function __construct()
+	{
+
+		$this->base_url = UNIFIED_BASE_URL;
+		
+		$this->admin_notices = new UNIFIED_PAYMENT_GATEWAY_Admin_Notices();
+
+		add_action('admin_init', [$this, 'unified_handle_environment_check']);
+		add_action('admin_notices', [$this->admin_notices, 'display_notices']);
+		add_action('plugins_loaded', [$this, 'unified_init'], 10);
+
+		// Register the AJAX action callback for checking payment status
+		add_action('wp_ajax_unified_check_payment_status', array($this, 'unified_handle_check_payment_status_request'));
+		add_action('wp_ajax_nopriv_unified_check_payment_status', array($this, 'unified_handle_check_payment_status_request'));
+
+		add_action('wp_ajax_unified_popup_closed_event', array($this, 'handle_popup_close'));
+		add_action('wp_ajax_nopriv_unified_popup_closed_event', array($this, 'handle_popup_close'));
+
+		add_action('wp_ajax_unified_manual_sync', [$this, 'unified_manual_sync_callback']);
+		add_filter('cron_schedules', [$this, 'unified_add_cron_interval']);
+		add_action('unified_cron_event', [$this, 'handle_cron_event']);
+		add_action('wp_ajax_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
+		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']); 
+		add_action('wp', function () {
+		    // Allow notices ONLY on checkout page
+		    if ( ! is_checkout() ) {
+			remove_action(
+			    'woocommerce_before_checkout_form',
+			    'woocommerce_output_all_notices',
+			    10
+			);
+			// Clear queued notices (errors, success, info)
+			if ( function_exists( 'wc_clear_notices' ) ) {
+				wc_clear_notices();
+			}
+		    }
+
+		});
+
+		add_action('woocommerce_checkout_create_order', function($order){
+			$order->delete_meta_data('_wc_order_attribution_session_entry');
+		}, 10);
+		add_action('init', function() {
+			if (function_exists('WC') && WC()->session == null) {
+				WC()->initialize_session();
+			}
+		});
+
+		add_action('woocommerce_before_checkout_form', [$this, 'unified_show_checkout_error']);
+	}
+
+	/**
+	 * ── FIXED ──────────────────────────────────────────────────────────────────
+	 * Handle the block checkout AJAX payment request.
+	 *
+	 * Root cause of "No available payment accounts":
+	 * `new UNIFIED_PAYMENT_GATEWAY()` creates a cold instance. In an AJAX
+	 * context WooCommerce has not called init_settings() on it, so
+	 * $this->sandbox defaults to false and get_option() returns empty values.
+	 * get_next_available_account() then finds no matching keys → returns false.
+	 *
+	 * Fix: pull the already-booted instance from WC()->payment_gateways().
+	 * That instance was fully initialised during the normal WC boot cycle so
+	 * sandbox mode and account keys are correct.
+	 * ───────────────────────────────────────────────────────────────────────────
+	 */
+	function handle_unified_gateway_ajax(){
+
+		// Nonce verification
+		$nonce = isset($_POST['nonce'])
+			? sanitize_text_field(wp_unslash($_POST['nonce']))
+			: '';
+
+		if (empty($nonce) || !wp_verify_nonce($nonce, 'unified_payment')) {
+			wp_send_json(['result' => 'fail', 'error' => 'Security check failed.']);
+			die;
+		}
+
+		// Pull the already-initialised gateway from the WC registry.
+		// Never use `new UNIFIED_PAYMENT_GATEWAY()` here — see note above.
+		$gateways       = WC()->payment_gateways()->payment_gateways();
+		$unifiedPayment = $gateways['unified'] ?? null;
+
+		if (!$unifiedPayment) {
+			// Fallback: manually instantiate and force-load settings from DB.
+			// Should never happen in normal operation.
+			$unifiedPayment = new UNIFIED_PAYMENT_GATEWAY();
+			$unifiedPayment->init_settings();
+			$unifiedPayment->load_gateway_settings();
+
+			Unified_Payment_Gateway_Logger::warning(
+				'Unified: gateway not found in WC registry during AJAX — fell back to manual instantiation.',
+				['source' => 'unified-payment-gateway']
+			);
+		}
+
+		$orderID = WC()->session ? WC()->session->get('store_api_draft_order') : null;
+
+		$status = [];
+		if($orderID){
+			$status = $unifiedPayment->process_payment($orderID);
+		}else{
+			wc_add_notice(__('Invalid order.', 'unified-payment-gateway'), 'error');
+			$status = ['result' => 'fail','error' => 'Invalid order.'];
+		}
+		
+		wp_send_json($status);
+		die;
+	}
+
+	/**
+	 * Initializes the plugin.
+	 * This method is hooked into 'plugins_loaded' action.
+	 */
+	public function unified_init()
+	{
+		// Check if the environment is compatible
+		$environment_warning = unified_check_system_requirements();
+		if ($environment_warning) {
+			return;
+		}
+
+		// Initialize gateways
+		$this->unified_init_gateways();
+
+		// Register blocks gateway
+		$this->unified_init_blocks();
+		
+		add_action( 'enqueue_block_assets', [ $this, 'register_blocks_assets' ] );
+
+		// Initialize REST API
+		$rest_api = UNIFIED_PAYMENT_GATEWAY_REST_API::get_instance();
+		$rest_api->unified_register_routes();
+
+		// Add plugin action links
+		add_filter('plugin_action_links_' . plugin_basename(UNIFIED_PAYMENT_GATEWAY_FILE), [$this, 'unified_plugin_action_links']);
+
+		// Add plugin row meta
+		add_filter('plugin_row_meta', [$this, 'unified_plugin_row_meta'], 10, 2);
+	}
+
+	public function unified_show_checkout_error()
+	{
+		if (!function_exists('WC')) return;
+
+		$error = WC()->session->get('unified_error');
+		if (!$error) return;
+
+		$messages = [
+			'failed'    => 'Payment failed. Please try again.',
+			'cancelled' => 'Payment was cancelled.',
+			'expired'   => 'Payment session expired. Please try again.'
+		];
+
+		// Clear error immediately
+		WC()->session->__unset('unified_error');
+
+		if (isset($messages[$error])) {
+			wc_add_notice($messages[$error], 'error');
+		}
+	}
+
+	/**
+	 * Initialize gateways.
+	 */
+	private function unified_init_gateways()
+	{
+		if (!class_exists('WC_Payment_Gateway')) {
+			return;
+		}
+
+		include_once UNIFIED_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/class-unified-payment-gateway.php';
+
+		add_filter('woocommerce_payment_gateways', function ($methods) {
+			$methods[] = 'UNIFIED_PAYMENT_GATEWAY';			
+			return $methods;
+		});
+	}
+
+	private function unified_init_blocks() {
+		
+			if ( class_exists( '\Automattic\WooCommerce\Blocks\Payments\Integrations\AbstractPaymentMethodType' ) ) {
+
+				require_once UNIFIED_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/class-unified-blocks-gateway.php';
+
+				add_action( 'woocommerce_blocks_payment_method_type_registration', function( $registry ) {
+					$registry->register( new UNIFIED_Blocks_Gateway() );
+				});
+			}
+	
+	}
+	
+	public function register_blocks_assets() {
+		
+		if (is_checkout()) {
+			$image_url = plugin_dir_url( dirname( __FILE__ ) ) . 'assets/images/loader.gif';
+			wp_register_script(
+				'unified-blocks-js',
+				plugin_dir_url( UNIFIED_PAYMENT_GATEWAY_FILE ) . 'assets/js/unified-blocks.js',
+				[ 'wc-blocks-registry', 'wc-settings', 'wp-element' ],
+				'1.0.0',
+				true
+			);
+
+			$settings = get_option( 'woocommerce_unified_settings', [] );
+
+			wp_localize_script(
+				'unified-blocks-js',
+				'unified_params',
+				[ 'settings' => $settings,
+				 'ajax_url' => admin_url('admin-ajax.php'),
+				 'unified_loader' => $image_url,
+				 'unified_nonce' => wp_create_nonce('unified_payment'), 
+				 'checkout_url' => wc_get_checkout_url(),
+				 'payment_method' => 'unified' 
+				]
+			);
+	
+		}
+	}
+
+
+	private function get_api_url($endpoint)
+	{
+		return $this->base_url . $endpoint;
+	}
+
+	/**
+	 * Add action links to the plugin page.
+	 * @param array $links
+	 * @return array
+	 */
+	public function unified_plugin_action_links($links)
+	{
+		$plugin_links = [
+			'<a href="' . esc_url(admin_url('admin.php?page=wc-settings&tab=checkout&section=unified')) . '">' . esc_html__('Settings', 'unified-payment-gateway') . '</a>',
+		];
+
+		return array_merge($plugin_links, $links);
+	}
+
+	/**
+	 * Add row meta to the plugin page.
+	 * @param array $links
+	 * @param string $file
+	 * @return array
+	 */
+	public function unified_plugin_row_meta($links, $file)
+	{
+		if (plugin_basename(UNIFIED_PAYMENT_GATEWAY_FILE) === $file) {
+			$row_meta = [
+				'docs'    => '<a href="' . esc_url(apply_filters('unified_docs_url', 'https://qa-rt.unified.xyz/docs/wordpress-plugin')) . '" target="_blank">' . esc_html__('Documentation', 'unified-payment-gateway') . '</a>',
+				'support' => '<a href="' . esc_url(apply_filters('unified_support_url', 'https://qa-rt.unified.xyz/contact-us')) . '" target="_blank">' . esc_html__('Support', 'unified-payment-gateway') . '</a>',
+			];
+
+			$links = array_merge($links, $row_meta);
+		}
+
+		return $links;
+	}
+
+	/**
+	 * Check the environment and display notices if necessary.
+	 */
+	public function unified_handle_environment_check()
+	{
+		$environment_warning = unified_check_system_requirements();
+		if ($environment_warning) {
+			// Sanitize the environment warning before displaying it
+			$this->admin_notices->unified_add_notice('error', 'error', sanitize_text_field($environment_warning));
+		}
+	}
+
+	/**
+	 * Handle the AJAX request for checking payment status.
+	 * @param $request
+	 */
+	public function unified_handle_check_payment_status_request($request)
+	{
+		check_ajax_referer('unified_payment', 'security');
+
+		// Sanitize and validate the order ID from $_POST
+		$order_id = isset($_POST['order_id']) ? intval(sanitize_text_field(wp_unslash($_POST['order_id']))) : null;
+		if (!$order_id) {
+			wp_send_json_error(array('error' => esc_html__('Invalid order ID', 'unified-payment-gateway')));
+		}
+
+		// Call the function to check payment status with the validated order ID
+		return $this->unified_check_payment_status($order_id);
+	}
+
+	/**
+	 * Check the payment status for an order.
+	 * @param int $order_id
+	 * @return WP_REST_Response
+	 */
+	public function unified_check_payment_status($order_id)
+	{
+		$order = wc_get_order($order_id);
+
+		if (!$order) {
+			return new WP_REST_Response([
+				'error' => esc_html__('Order not found', 'unified-payment-gateway')
+			], 404);
+		}
+
+		$security = isset($_POST['security'])
+			? sanitize_text_field(wp_unslash($_POST['security']))
+			: '';
+
+		$log_prefix = "[Order #{$order_id}]";
+
+		// -------------------------
+		// NONCE CHECK
+		// -------------------------
+		if (empty($security) || !wp_verify_nonce($security, 'unified_payment')) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' CheckStatus | Invalid nonce'
+			);
+
+			wp_send_json_error([
+				'message' => 'Nonce verification failed.'
+			]);
+
+			wp_die();
+		}
+
+		// -------------------------
+		// API CALL
+		// -------------------------
+		$payment_token = $order->get_meta('_unified_pay_id');
+
+		$response = wp_remote_post(
+			$this->get_api_url('/api/update-txn-status'),
+			[
+				'method'  => 'POST',
+				'body'    => wp_json_encode([
+					'order_id'      => $order_id,
+					'payment_token' => $payment_token
+				]),
+				'headers' => [
+					'Content-Type'  => 'application/json',
+					'Authorization' => 'Bearer ' . $security,
+				],
+				'timeout' => 15,
+			]
+		);
+
+		if (is_wp_error($response)) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' CheckStatus | API error'
+			);
+
+			wp_send_json_error([
+				'message' => 'API connection failed.'
+			]);
+
+			wp_die();
+		}
+
+		$response_data = json_decode(
+			wp_remote_retrieve_body($response),
+			true
+		);
+
+		if (!is_array($response_data)) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' CheckStatus | Invalid API response'
+			);
+
+			wp_send_json_error([
+				'message' => 'Invalid API response.'
+			]);
+
+			wp_die();
+		}
+
+		$payment_status =
+			$response_data['transaction_status']
+			?? $response_data['payment_status']
+			?? null;
+
+		// -------------------------
+		// ENGINE CALL
+		// -------------------------
+		if ($payment_status) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . " CheckStatus | Engine trigger ({$payment_status})"
+			);
+
+			$result = UNIFIED_PAYMENT_ENGINE::handle_event(
+				$order_id,
+				'redirect_check',
+				[
+					'status'        => $payment_status,
+					'payment_token' => $payment_token,
+				]
+			);
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . " CheckStatus | Engine result: " . json_encode($result)
+			);
+		}
+
+		// -------------------------
+		// REFRESH ORDER
+		// -------------------------
+		$order = wc_get_order($order_id);
+
+		$wc_status = $order->get_status();
+
+		$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state(
+			$order,
+			$payment_status
+		);
+
+		/**
+		 * SUCCESS ALWAYS WINS
+		 */
+		if ($order->has_status(['processing', 'completed'])) {
+			$state = 'success';
+		}
+
+		// -------------------------
+		// REDIRECT
+		// -------------------------
+		$redirect = null;
+
+		if ($order->has_status(['processing', 'completed'])) {
+
+			$redirect = $order->get_checkout_order_received_url();
+
+		} elseif (in_array($state, ['failed', 'cancelled'], true)) {
+
+			$redirect = wc_get_checkout_url();
+		}
+
+		// -------------------------
+		// RESPONSE
+		// -------------------------
+		wp_send_json_success([
+			'status'        => $state,
+			'payment_status'=> $payment_status,
+			'order_status'  => $wc_status,
+			'redirect_url'  => $redirect,
+		]);
+
+		wp_die();
+	}
+
+	private function unified_log($message, $context = [])
+	{
+		if (function_exists('wc_get_logger')) {
+			Unified_Payment_Gateway_Logger::info(
+				$message,
+				array_merge([
+					'source' => 'unified-payment-gateway'
+				], $context)
+			);
+		}
+	}
+
+	public function handle_popup_close()
+	{
+		$order_id = isset($_POST['order_id'])
+			? sanitize_text_field(wp_unslash($_POST['order_id']))
+			: 'unknown';
+
+		$security = isset($_POST['security'])
+			? sanitize_text_field(wp_unslash($_POST['security']))
+			: '';
+
+		$log_prefix = "[Order #{$order_id}]";
+
+		// -------------------------
+		// NONCE CHECK
+		// -------------------------
+		if (empty($security) || !wp_verify_nonce($security, 'unified_payment')) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' PopupClose | Invalid nonce'
+			);
+
+			wp_send_json_error([
+				'reload' => true
+			]);
+
+			wp_die();
+		}
+
+		// -------------------------
+		// ORDER CHECK
+		// -------------------------
+		$order = wc_get_order($order_id);
+
+		if (!$order) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' PopupClose | Order not found'
+			);
+
+			wp_send_json_error([
+				'reload' => true
+			]);
+
+			wp_die();
+		}
+
+		// -------------------------
+		// API CALL
+		// -------------------------
+		$payment_token = $order->get_meta('_unified_active_pay_id');
+
+		if (empty($payment_token)) {
+			$payment_token = $order->get_meta('_unified_pay_id');
+		}
+
+		$response = wp_remote_post(
+			$this->get_api_url('/api/update-txn-status'),
+			[
+				'method'  => 'POST',
+				'body'    => wp_json_encode([
+					'order_id'      => $order_id,
+					'payment_token' => $payment_token
+				]),
+				'headers' => [
+					'Content-Type'  => 'application/json',
+					'Authorization' => 'Bearer ' . $security,
+				],
+				'timeout' => 15,
+			]
+		);
+
+		if (is_wp_error($response)) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' PopupClose | API error'
+			);
+
+			wp_send_json_error([
+				'reload' => true
+			]);
+
+			wp_die();
+		}
+
+		$response_data = json_decode(
+			wp_remote_retrieve_body($response),
+			true
+		);
+
+		if (!is_array($response_data)) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' PopupClose | Invalid API response'
+			);
+
+			wp_send_json_error([
+				'reload' => true
+			]);
+
+			wp_die();
+		}
+
+		$payment_status =
+			$response_data['payment_status']
+			?? $response_data['transaction_status']
+			?? null;
+
+		// -------------------------
+		// NO STATUS
+		// -------------------------
+		if (!$payment_status) {
+
+			wp_send_json([
+				'success' => false,
+				'message' => 'Payment was not completed.',
+				'data' => [
+					'payment_status' => 'abandoned',
+					'order_status'   => $order->get_status(),
+					'state'          => 'abandoned',
+					'redirect'       => null,
+				]
+			]);
+
+			wp_die();
+		}
+
+		// -------------------------
+		// ENGINE CALL
+		// -------------------------
+		$result = UNIFIED_PAYMENT_ENGINE::handle_event(
+			$order_id,
+			'popup_close',
+			[
+				'status'        => $payment_status,
+				'payment_token' => $payment_token,
+			]
+		);
+
+		// ❌ REMOVE locked_skip handling completely
+
+		Unified_Payment_Gateway_Logger::info(
+			$log_prefix . ' PopupClose | Engine result: ' . wp_json_encode($result)
+		);
+
+		// Ignore lock races and wait for next poll
+		if (
+			is_array($result) &&
+			(($result['reason'] ?? '') === 'locked_skip')
+		)
+		{
+			$order = wc_get_order($order_id);
+
+			$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state($order);
+
+			wp_send_json([
+				'success' => ($state === 'success'),
+				'message' => '',
+				'data' => [
+					'state'          => $state ?: 'processing',
+					'payment_status' => $payment_status,
+					'redirect'       => $state === 'success'
+						? $order->get_checkout_order_received_url()
+						: null,
+					'order_id'       => $order_id,
+				],
+			]);
+
+			wp_die();
+		}
+
+		// -------------------------
+		// ALWAYS RELOAD ORDER AFTER ENGINE
+		// -------------------------
+		$order = wc_get_order($order_id);
+
+		// 🔥 PRIMARY STATE = ENGINE STORED STATE ONLY
+		$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state($order);
+
+		// -------------------------
+		// HARD OVERRIDE SAFETY (ONLY ONE SOURCE)
+		// -------------------------
+		if ($order->get_meta('_unified_state') === 'success') {
+			$state = 'success';
+		}
+
+		// -------------------------
+		// FINAL SUCCESS CHECK
+		// -------------------------
+		$is_success = ($state === 'success');
+
+		if ($state !== 'success' && !empty($response_data['transaction_status']) && $response_data['transaction_status'] === 'processing') {
+
+			$state = 'processing';
+		}
+		// -------------------------
+		// MESSAGE
+		// -------------------------
+		$message = match ($state) {
+
+			'success' =>
+				'Your payment was completed successfully.',
+
+			'failed' =>
+				'Payment failed. Please try again or use another method.',
+
+			'cancelled' =>
+				'You cancelled the payment.',
+
+			'processing' =>
+				'Payment is being processed.',
+
+			default =>
+				'We couldn’t confirm your payment status yet. If needed, you can try placing the order again after checking your order status.'
+		};
+
+		// -------------------------
+		// REDIRECT
+		// -------------------------
+		$redirect = null;
+
+		// 🔥 ONLY ENGINE STATE DECIDES REDIRECT
+		if ($state === 'success') {
+
+			$redirect = $order->get_checkout_order_received_url();
+
+		} elseif (in_array($state, ['failed', 'cancelled', 'expired'], true)) {
+
+			$redirect = wc_get_checkout_url();
+
+		} else {
+
+			$redirect = null; // processing → no redirect
+		}
+
+		// -------------------------
+		// RESPONSE
+		// -------------------------
+		wp_send_json([
+			'success' => $is_success,
+			'message' => $message,
+			'data' => [
+				'payment_status' => $payment_status,
+				'order_status'   => $order->get_status(),
+				'state'          => $state,
+				'redirect'       => $redirect,
+				'order_id'       => $order_id,
+			]
+		]);
+
+		wp_die();
+	}
+
+	/**
+     * Add custom cron schedules.
+     */
+	public function unified_add_cron_interval($schedules)
+	{
+		$schedules['every_two_hours'] = array(
+			'interval' => 2 * 60 * 60, // 2 hours in seconds = 7200
+			'display'  => __('Every Two Hours', 'unified-payment-gateway')
+		);
+		return $schedules;
+	}
+
+	function activate_cron_job()
+	{
+		Unified_Payment_Gateway_Logger::info('Automatic payment status checks have been enabled.', ['source' => 'unified-payment-gateway']);
+
+		// Clear existing scheduled event if it exists
+		$timestamp = wp_next_scheduled('unified_cron_event');
+		if ($timestamp) {
+			wp_unschedule_event($timestamp, 'unified_cron_event');
+		}
+
+		// Schedule with new interval
+		wp_schedule_event(time(), 'every_two_hours', 'unified_cron_event');
+	}
+
+	function deactivate_cron_job()
+	{
+		Unified_Payment_Gateway_Logger::info('Automatic payment status checks have been disabled.', ['source' => 'unified-payment-gateway']);
+		wp_clear_scheduled_hook('unified_cron_event');
+	}
+
+
+	public function handle_cron_event()
+	{
+		$logger_context = ['source' => 'unified-payment-gateway'];
+
+		$accounts = get_option('woocommerce_unified_payment_gateway_accounts');
+		if (is_string($accounts)) {
+			$unserialized = maybe_unserialize($accounts);
+			$accounts = is_array($unserialized) ? $unserialized : [];
+		}
+
+		if (!$accounts || !is_array($accounts)) {
+			Unified_Payment_Gateway_Logger::warning('No payment accounts found or the account format is invalid. Sync aborted.', $logger_context);
+			return [];
+		}
+
+		$accountsData = [];
+
+		foreach ($accounts as &$account) {
+			$isSandboxEnabled = isset($account['has_sandbox']) && $account['has_sandbox'] === 'on';
+
+			// Prepare both live and sandbox entries
+			if (!empty($account['live_public_key']) && !empty($account['live_secret_key'])) {
+				$accountsData[] = [
+					'account_name' => $account['title'],
+					'public_key'   => $account['live_public_key'],
+					'secret_key'   => $account['live_secret_key'],
+					'mode'         => 'live',
+				];
+			}
+
+			if ($isSandboxEnabled && !empty($account['sandbox_public_key']) && !empty($account['sandbox_secret_key'])) {
+				$accountsData[] = [
+					'account_name' => $account['title'],
+					'public_key'   => $account['sandbox_public_key'],
+					'secret_key'   => $account['sandbox_secret_key'],
+					'mode'         => 'sandbox',
+				];
+			}
+		}
+
+		if (empty($accountsData)) {
+			Unified_Payment_Gateway_Logger::warning('No valid credentials found in any payment account. Sync skipped.', $logger_context);
+			return [];
+		}
+
+		$url = esc_url($this->base_url . '/api/sync-account-status');
+		$response = wp_remote_post($url, [
+			'headers' => [
+				'Content-Type'  => 'application/json',
+			],
+			'body' => json_encode(['accounts' => $accountsData]),
+			'timeout' => 15,
+		]);
+
+		if (is_wp_error($response)) {
+			Unified_Payment_Gateway_Logger::error('Unable to connect to the sync service. Please check the server connection or endpoint.', $logger_context);
+			return [];
+		}
+
+		$response_body = wp_remote_retrieve_body($response);
+		$response_data = json_decode($response_body, true);
+
+		$updated = false;
+		$statusSummary = [];
+
+		if (!empty($response_data['data'])) {
+			foreach ($response_data['data'] as $statusData) {
+				if (
+					isset($statusData['mode'], $statusData['public_key'], $statusData['status']) &&
+					!empty($statusData['status'])
+				) {
+					foreach ($accounts as &$account) {
+						if (
+							$statusData['mode'] === 'live' &&
+							$account['live_public_key'] === $statusData['public_key']
+						) {
+							$account['live_status'] = $statusData['status'];
+							$updated = true;
+							$statusSummary[] = [
+								'title'  => $account['title'] ?? 'N/A',
+								'mode'   => $statusData['mode'],
+								'status' => $statusData['status'],
+							];
+						}
+
+						if (
+							$statusData['mode'] === 'sandbox' &&
+							$account['sandbox_public_key'] === $statusData['public_key']
+						) {
+							$account['sandbox_status'] = $statusData['status'];
+							$updated = true;
+							$statusSummary[] = [
+								'title'  => $account['title'] ?? 'N/A',
+								'mode'   => $statusData['mode'],
+								'status' => $statusData['status'],
+							];
+						}
+					}
+				}
+			}
+		}
+
+		if (!empty($statusSummary)) {
+			if ($updated) {
+				update_option('woocommerce_unified_payment_gateway_accounts', $accounts);
+
+				Unified_Payment_Gateway_Logger::info('Payment account statuses were successfully updated after syncing.', [
+					'source'  => 'unified-payment-gateway',
+					'context' => ['updated_accounts' => $statusSummary],
+				]);
+			} else {
+				Unified_Payment_Gateway_Logger::info('Payment accounts were checked, but no updates were necessary.', [
+					'source'  => 'unified-payment-gateway',
+					'context' => ['checked_accounts' => $statusSummary],
+				]);
+			}
+		} else {
+			Unified_Payment_Gateway_Logger::info('Sync completed. No account status data was returned from the server.', $logger_context);
+		}
+
+		return $statusSummary;
+	}
+
+
+	function unified_manual_sync_callback()
+	{
+		$logger_context = ['source' => 'unified-payment-gateway'];
+		// Verify nonce first
+		if (!check_ajax_referer('unified_sync_nonce', 'nonce', false)) {
+			Unified_Payment_Gateway_Logger::error('Security validation failed during manual sync.', $logger_context);
+			wp_send_json_error([
+				'message' => __('Security check failed. Please refresh the page and try again.', 'unified-payment-gateway')
+			], 400);
+			wp_die();
+		}
+
+		// Check user capabilities
+		if (!current_user_can('manage_woocommerce')) {
+		Unified_Payment_Gateway_Logger::error('Unauthorized manual sync attempt by user ID: ' . get_current_user_id(), $logger_context);
+			wp_send_json_error([
+				'message' => __('You do not have permission to perform this action.', 'unified-payment-gateway')
+			], 403);
+			wp_die();
+		}
+
+		Unified_Payment_Gateway_Logger::info("Payment accounts sync initiated", $logger_context);
+
+		try {
+			ob_start();
+
+			$statusSummary = $this->handle_cron_event();
+			$output = ob_get_clean();
+
+			if (!empty($output)) {
+				Unified_Payment_Gateway_Logger::warning('Unexpected output generated during sync: ' . $output, $logger_context);
+			}
+
+			Unified_Payment_Gateway_Logger::info('Payment accounts sync completed successfully.', $logger_context);
+
+			wp_send_json_success([
+				'message'  => __('Payment accounts synchronized successfully.', 'unified-payment-gateway'),
+				'timestamp' => current_time('mysql'),
+				'statuses' => $statusSummary
+			]);
+		} catch (Exception $e) {
+			Unified_Payment_Gateway_Logger::error('Payment accounts sync failed: ' . $e->getMessage(), $logger_context);
+			wp_send_json_error([
+				'message' => __('Sync failed: ', 'unified-payment-gateway') . $e->getMessage(),
+				'code'    => $e->getCode()
+			], 500);
+		}
+
+		wp_die(); // Always include this
+	}
+
+	public function unified_send_plugin_status($plugin_status, $gateway_loaded)
+	{
+		$accounts = get_option('woocommerce_unified_payment_gateway_accounts', []);
+		
+		if (is_string($accounts)) {
+			$unserialized = maybe_unserialize($accounts);
+			$accounts = is_array($unserialized) ? $unserialized : [];
+		}
+
+		if (empty($accounts) || !is_array($accounts)) {
+			return;
+		}
+
+		// Find first available public key
+		$public_key = '';
+
+		foreach ($accounts as $account) {
+			if (!empty($account['live_public_key'])) {
+				$public_key = $account['live_public_key'];
+				break;
+			}
+
+			if (!empty($account['sandbox_public_key'])) {
+				$public_key = $account['sandbox_public_key'];
+				break;
+			}
+		}
+
+		if (empty($public_key)) {
+			Unified_Payment_Gateway_Logger::error(
+				'Unable to send plugin status. No public key found.',
+				[
+					'source' => 'unified-payment-gateway',
+				]
+			);
+			return;
+		}
+
+		global $wp_version;
+
+		$body = [
+			'valid_accounts'         => $accounts,
+			'plugin_status'          => (int) $plugin_status,
+			'gateway_loaded'         => (int) $gateway_loaded,
+			'plugin_version'         => UNIFIED_PLUGIN_VERSION,
+			'wordpress_version'      => $wp_version,
+			'woocommerce_version'    => class_exists('WooCommerce') && function_exists('WC')
+				? WC()->version
+				: '',
+			'woocommerce_db_version' => get_option('woocommerce_db_version'),
+			'group_id'               => get_option('unified_group_id'),
+			'domain_name'            => wp_parse_url(home_url(), PHP_URL_HOST),
+		];
+
+		$response = wp_remote_post(
+			trailingslashit(UNIFIED_BASE_URL) . 'api/plugin/check/plugin',
+			[
+				'method'    => 'POST',
+				'timeout'   => 30,
+				'sslverify' => true,
+				'headers'   => [
+					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
+				],
+				'body'      => $body,
+			]
+		);
+
+		if (is_wp_error($response)) {
+			Unified_Payment_Gateway_Logger::error(
+				'Plugin status API call failed.',
+				[
+					'source'  => 'unified-payment-gateway',
+					'context' => [
+						'error' => $response->get_error_message(),
+					],
+				]
+			);
+			return;
+		}
+
+		Unified_Payment_Gateway_Logger::info(
+			'Plugin status updated successfully.',
+			[
+				'source'  => 'unified-payment-gateway',
+				'context' => [
+					'plugin_status'  => $plugin_status,
+					'gateway_loaded' => $gateway_loaded,
+					'response_code'  => wp_remote_retrieve_response_code($response),
+				],
+			]
+		);
+	}
+}
