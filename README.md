@@ -145,6 +145,7 @@ The official documentation for this plugin is available at: [https://rt.app/docs
 ### Version 1.0.2
 - Failed Payment Redirect: Improved the failed payment flow by redirecting customers back to the checkout page without displaying a duplicate payment failure notice, preventing redundant error messages.
 - PO Box Validation: Expanded PO Box detection to support additional address variations such as `POB`, `Postal Box`, and `Post Office Box`.
+- Address Validation: Added a minimum length requirement of 5 characters for the billing address to help prevent invalid or incomplete address submissions during checkout.
 
 ### Version 1.0.1
 

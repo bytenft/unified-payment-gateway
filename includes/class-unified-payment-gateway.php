@@ -1572,8 +1572,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			wc_add_notice(__('Last name must contain at least 3 characters.', 'unified-payment-gateway'), 'error');
 		}
 
-		if (strlen(trim($billing_address_1)) < 3) {
-			wc_add_notice(__('Please enter a valid address (minimum 3 characters).', 'unified-payment-gateway'), 'error');
+		if (strlen(trim($billing_address_1)) < 5) {
+			wc_add_notice(__('Address must contain at least 5 characters.', 'unified-payment-gateway'), 'error');
 		}
 
 		if (strlen(trim($billing_city)) < 3) {
