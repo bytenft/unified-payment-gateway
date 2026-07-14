@@ -656,6 +656,8 @@
 
             if (!this.getBillingAddress1($form)?.trim()) {
                 errors.push('Please enter your address.');
+            } else if (this.getBillingAddress1($form).length < 5) {
+                errors.push('Address must contain at least 5 characters.');
             }
 
             if (!this.getBillingCity($form)?.trim()) {
