@@ -312,6 +312,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 						'error'      => $normalized['error'] ?? null,
 					]
 				);
+				wc_add_notice(__($normalized['error'], 'unified-payment-gateway'), 'error');
 
 				throw new Exception(
 					$normalized['error'] ?? 'Invalid phone number.'
@@ -1643,7 +1644,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			);
 
 			if (!$normalized['is_valid']) {
-				wc_add_notice($normalized['error'], 'error');
+				wc_add_notice(__($normalized['error'], 'unified-payment-gateway'), 'error');
+
 
 				return [
 					'result' => 'fail',
