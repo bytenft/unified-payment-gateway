@@ -654,10 +654,14 @@
                 errors.push('Last name must contain at least 3 characters.');
             }
 
-            if (!this.getBillingAddress1($form)?.trim()) {
+            let billingAddress1 = this.getBillingAddress1($form)?.trim();
+
+            if (!billingAddress1) {
                 errors.push('Please enter your address.');
-            } else if (this.getBillingAddress1($form).length < 5) {
+            } else if (billingAddress1.length < 5) {
                 errors.push('Address must contain at least 5 characters.');
+            } else if (!/[a-zA-Z]/.test(billingAddress1)) {
+                errors.push('Please enter a valid address.');
             }
 
             if (!this.getBillingCity($form)?.trim()) {
