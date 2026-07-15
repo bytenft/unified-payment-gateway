@@ -985,13 +985,49 @@
             return /^[A-Za-z0-9 ]+$/.test(postcode);
         },
 
-        isValidPhoneNumber: function (phone) {
-            if (!phone) return true;
+        isValidPhoneNumber: function (p) {
 
-            const cleaned = phone.replace(/[\s\-().]/g, '');
+            if (!p) return true;
 
-            // Allow only digits with an optional leading +
-            return /^\+?\d+$/.test(cleaned);
+            const cleaned = p.replace(/[\s\-().]/g, '');
+
+            // digits only
+            if (!/^\+?\d+$/.test(cleaned)) {
+                return false;
+            }
+
+            const numberOnly = cleaned.replace('+','');
+
+            // reject repeated digits
+            if (/^(\d)\1+$/.test(numberOnly)) {
+                return false;
+            }
+
+            // reject common test numbers
+            const invalidNumbers = [
+                '0000000000',
+                '1111111111',
+                '2222222222',
+                '3333333333',
+                '4444444444',
+                '5555555555',
+                '6666666666',
+                '7777777777',
+                '8888888888',
+                '9999999999',
+                '1234567890',
+                '9876543210'
+            ];
+
+            if (invalidNumbers.includes(numberOnly)) {
+                return false;
+            }
+
+
+            return (
+                /^1?\d{10}$/.test(numberOnly) ||
+                /^[1-9]\d{6,14}$/.test(numberOnly)
+            );
         },
 
         bindInputSanitization: function () {
