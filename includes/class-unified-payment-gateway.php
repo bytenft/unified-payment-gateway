@@ -1554,10 +1554,10 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		$amount      = number_format($order->get_total(), 2, '.', '');
 		$email       = sanitize_text_field($order->get_billing_email());
 		$original_phone = $order->get_billing_phone();
-		$phone       = sanitize_text_field($original_phone);
+		$phone = preg_replace('/[\s\-\(\)]/', '', sanitize_text_field($original_phone));
 		$country     = $order->get_billing_country();
 		$country_code = WC()->countries->get_country_calling_code($country);
-		
+
 		$billing_address_1 = sanitize_text_field($order->get_billing_address_1());
 		$billing_address_2 = sanitize_text_field($order->get_billing_address_2());
 		$billing_city      = sanitize_text_field($order->get_billing_city());
