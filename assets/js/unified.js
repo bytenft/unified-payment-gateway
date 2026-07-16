@@ -329,9 +329,17 @@
                 const orderId = response?.order_id || response?.data?.order_id;
 
                 self.state.orderId = orderId;
-
                 if (!success) {
-                    self.failSafe(response?.message || response?.data?.message || 'Payment failed. Please try again.');
+
+                    let message =
+                        response?.message ||
+                        response?.data?.message;
+
+                    if (!message && response?.messages) {
+                        message = $('<div>').html(response.messages).text().trim();
+                    }
+
+                    self.failSafe(message || 'Payment failed. Please try again.');
                     return;
                 }
 
@@ -679,20 +687,6 @@
                 errors.push('Postal code cannot exceed 10 characters.');
             } else if (!this.isValidPostCode(postcode.trim())) {
                 errors.push('Please enter a valid postal code.');
-            }
-
-            const phone = this.getPhoneNumber($form);
-            if (phone && phone.trim()) {
-                const cleanedPhone = phone.replace(/[\s\-().]/g, '');
-                if (/[a-zA-Z]/.test(phone)) {
-                    errors.push('Phone number cannot contain letters.');
-                } else if (cleanedPhone.length < 10) {
-                    errors.push('Phone number must contain at least 10 digits.');
-                } else if (cleanedPhone.length > 15) {
-                    errors.push('Phone number cannot exceed 15 digits.');
-                } else if (!this.isValidPhoneNumber(phone)) {
-                    errors.push('Please enter a valid phone number.');
-                }
             }
 
             const poBox = this.validatePOBox($form);
