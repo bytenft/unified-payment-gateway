@@ -30,6 +30,7 @@ Visit the DFin website and log in to your account. Navigate to Developer Setting
 * Improved failed payment handling by preventing duplicate payment failure notices when redirecting customers back to the checkout page.
 * Expanded PO Box detection to support additional address variations such as `POB`, `Postal Box`, and `Post Office Box`.
 * Enhanced billing address validation by requiring a minimum of 5 characters and rejecting numeric-only street addresses to help prevent invalid or incomplete address submissions.
+* Enhanced phone number validation by rejecting invalid and dummy phone numbers, applying country-specific length validation, and enforcing international (E.164) phone number length limits.
 
 = 1.0.1 =
 * Resolved mobile number validation issues during checkout.
@@ -46,6 +47,7 @@ Visit the DFin website and log in to your account. Navigate to Developer Setting
 * This release improves the payment experience by preventing duplicate payment failure notices during failed payment redirects.
 * Enhanced PO Box validation by detecting additional address variations, including POB, Postal Box, and Post Office Box, to help prevent unsupported shipping addresses during checkout.
 * Strengthened billing address validation by requiring a minimum of 5 characters and rejecting numeric-only street addresses to help ensure valid and complete address information during checkout.
+* Improved phone number validation by detecting invalid and dummy phone numbers, applying country-specific validation rules, and enforcing international (E.164) phone number length requirements for more accurate customer information during checkout.
 
 = 1.0.1 =
 * This release improves the payment experience by resolving mobile number, ZIP/postal code, and PO Box validation issues. It also fixes invalid API key handling to improve plugin reliability and ensure a smoother checkout experience.
