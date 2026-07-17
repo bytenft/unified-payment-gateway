@@ -30,9 +30,7 @@
             requestInFlightClassic: false,
             requestInFlightBlock: false,
             responseHandled: false,
-            finalSuccess: false,
-            finalCheckDone: false,
-            popupReturnHandler: null
+            finalSuccess: false
         },
 
         /* =========================================================
@@ -544,8 +542,6 @@
                 this.state.popupInterval = null;
             }
 
-            this.teardownPopupReturnListener();
-
             if (this.state.popup && !this.state.popup.closed) {
                 try { this.state.popup.close(); } catch (e) {}
             }
@@ -567,33 +563,27 @@
                 self.state.popupInterval = null;
             }
 
-            // Remove any stale visibility listener from a previous attempt.
-            self.teardownPopupReturnListener();
+            self.state.popupInterval = setInterval(function () {
 
-            // One-shot guard: the final AJAX verification must run exactly
-            // once, no matter which signal (timer OR visibility) detects the
-            // return from the payment popup first.
-            self.state.finalCheckDone = false;
-
-            // --------------------------------------------------------------
-            // SINGLE SOURCE OF TRUTH for the post-popup verification.
-            // Tears down BOTH the interval and the visibility listener so it
-            // can never double-fire.
-            // --------------------------------------------------------------
-            const runFinalCheck = function () {
-
-                if (self.state.finalCheckDone) return;
-                if (self.state.finalSuccess) return;
-
-                self.state.finalCheckDone = true;
-
-                if (self.state.popupInterval) {
+                 if (self.state.finalSuccess) {
                     clearInterval(self.state.popupInterval);
                     self.state.popupInterval = null;
+                    return;
                 }
-                self.teardownPopupReturnListener();
 
-                console.log('[Unified] Popup return detected → single final check');
+                const popupStillOpen =
+                    self.state.popup &&
+                    !self.state.popup.closed;
+
+                // 👉 wait until popup closes
+                if (popupStillOpen) {
+                    return;
+                }
+
+                clearInterval(self.state.popupInterval);
+                self.state.popupInterval = null;
+
+                console.log('[Unified] Popup closed → single final check');
 
                 $.post(
                     unified_params.ajax_url,
@@ -619,6 +609,9 @@
 
                             self.state.finalSuccess = true;
 
+                            clearInterval(self.state.popupInterval);
+                            self.state.popupInterval = null;
+
                             self.cleanupPopup();
 
                             window.location.replace(redirectUrl);
@@ -638,61 +631,8 @@
                     },
                     'json'
                 );
-            };
-
-            // --------------------------------------------------------------
-            // DESKTOP / ANDROID PATH (unchanged behaviour):
-            // a real popup window keeps this tab in the foreground, so the
-            // timer keeps running and detects popup.closed reliably.
-            // --------------------------------------------------------------
-            self.state.popupInterval = setInterval(function () {
-
-                 if (self.state.finalSuccess) {
-                    clearInterval(self.state.popupInterval);
-                    self.state.popupInterval = null;
-                    self.teardownPopupReturnListener();
-                    return;
-                }
-
-                const popupStillOpen =
-                    self.state.popup &&
-                    !self.state.popup.closed;
-
-                // 👉 wait until popup closes
-                if (popupStillOpen) {
-                    return;
-                }
-
-                runFinalCheck();
 
             }, 1000); // small check ONLY for popup close detection
-
-            // --------------------------------------------------------------
-            // iOS PATH (the fix):
-            // On iOS Safari/Chrome window.open() spawns a NEW TAB, which
-            // backgrounds this checkout tab. iOS then SUSPENDS this tab's
-            // timers, and the payment tab frequently cannot auto-close
-            // itself — so popup.closed stays false and the interval above
-            // never triggers the check. visibilitychange fires the moment
-            // the user returns to this tab (payment tab closed or swiped
-            // back), giving us a reliable trigger for the same check.
-            //
-            // On desktop this opener tab never becomes hidden, so this
-            // listener never fires there — no behavioural change off iOS.
-            // --------------------------------------------------------------
-            self.state.popupReturnHandler = function () {
-                if (document.visibilityState === 'visible') {
-                    runFinalCheck();
-                }
-            };
-            document.addEventListener('visibilitychange', self.state.popupReturnHandler);
-        },
-
-        teardownPopupReturnListener: function () {
-            if (this.state.popupReturnHandler) {
-                document.removeEventListener('visibilitychange', this.state.popupReturnHandler);
-                this.state.popupReturnHandler = null;
-            }
         },
 
         /* =========================================================
@@ -879,9 +819,6 @@
                 clearInterval(this.state.popupInterval);
                 this.state.popupInterval = null;
             }
-
-            this.teardownPopupReturnListener();
-            this.state.finalCheckDone = false;
 
             this.state.submitting = false;
             this.state.status = 'idle';
