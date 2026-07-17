@@ -32,8 +32,9 @@
             responseHandled: false,
             finalSuccess: false,
             awaitingResult: false, // true once the payment tab/popup has been launched
-            resultChecked: false,  // guard so the final status check runs only once
-            wentHidden: false      // true once the checkout tab was actually backgrounded
+            resultChecked: false,  // guard so a finished (non-processing) check runs once
+            launchTime: 0,         // timestamp the payment tab was launched (iOS guard)
+            processingRetries: 0   // bounded re-checks while the gateway still says "processing"
         },
 
         /* =========================================================
@@ -414,7 +415,8 @@
             this.state.finalSuccess = false;
             this.state.awaitingResult = false;
             this.state.resultChecked = false;
-            this.state.wentHidden = false;
+            this.state.launchTime = 0;
+            this.state.processingRetries = 0;
 
             setTimeout(() => {
                 this.setStatus('idle');
@@ -565,17 +567,18 @@
             }
 
             // We are now waiting for the payment tab/popup to resolve.
-            // Two signals can trigger the final status check:
+            // Two independent signals can resolve it:
             //   1. Desktop / Android: popup.closed flips to true (polled below).
             //   2. iOS Safari: the customer returns to the checkout tab, which
-            //      fires a `visibilitychange` event (handled in
+            //      fires visibilitychange/pageshow/focus (see
             //      bindPopupReturnDetection). iOS opens the payment page as a
-            //      new tab (not a real popup), so popup.closed never becomes
-            //      true and the timer below is frozen while that tab is in
-            //      front — visibility is the only reliable signal there.
-            self.state.awaitingResult = true;
-            self.state.resultChecked  = false;
-            self.state.wentHidden     = false;
+            //      new TAB — not a real popup — so popup.closed never becomes
+            //      true and this timer is frozen while that tab is in front.
+            //      Visibility is the ONLY reliable signal there.
+            self.state.awaitingResult    = true;
+            self.state.resultChecked     = false;
+            self.state.launchTime        = Date.now();
+            self.state.processingRetries = 0;
 
             // clear any previous interval (important safety)
             if (self.state.popupInterval) {
@@ -585,7 +588,7 @@
 
             self.state.popupInterval = setInterval(function () {
 
-                if (self.state.finalSuccess || self.state.resultChecked) {
+                if (self.state.finalSuccess || !self.state.awaitingResult) {
                     clearInterval(self.state.popupInterval);
                     self.state.popupInterval = null;
                     return;
@@ -603,7 +606,7 @@
                 clearInterval(self.state.popupInterval);
                 self.state.popupInterval = null;
 
-                console.log('[Unified] Popup closed → single final check');
+                console.log('[Unified] Popup closed → final check');
                 self.runFinalCheck();
 
             }, 1000); // small check ONLY for popup close detection
@@ -612,7 +615,10 @@
         /* =========================================================
          * FINAL PAYMENT RESULT CHECK
          * Shared by desktop popup-close polling and the iOS
-         * visibility-return handler. Runs at most once per attempt.
+         * visibility-return handler. Safe to call multiple times:
+         *   - success  → redirect
+         *   - failed/cancelled/abandoned → show message + reset
+         *   - processing → keep waiting (re-armed for the next signal)
          * ========================================================= */
 
         runFinalCheck: function () {
@@ -624,12 +630,8 @@
             if (self.state.finalSuccess) return;
             if (!self.state.orderId) return;
 
+            // Lock this pass so overlapping signals don't double-POST.
             self.state.resultChecked = true;
-
-            if (self.state.popupInterval) {
-                clearInterval(self.state.popupInterval);
-                self.state.popupInterval = null;
-            }
 
             $.post(
                 unified_params.ajax_url,
@@ -640,8 +642,11 @@
                 },
                 function (response) {
 
+                    const state = response?.data?.state || '';
+
                     const success =
                         response?.success === true ||
+                        state === 'success' ||
                         response?.data?.payment_status === 'success' ||
                         response?.data?.payment_status === 'paid';
 
@@ -657,12 +662,41 @@
                         self.state.awaitingResult = false;
 
                         self.cleanupPopup();
-
                         window.location.replace(redirectUrl);
                         return;
                     }
 
-                    console.log('[Unified] Payment failed / incomplete');
+                    // Payment still in progress — the customer glanced back
+                    // before finishing. Do NOT abort; re-arm and keep waiting.
+                    if (state === 'processing' || response?.data?.payment_status === 'pending') {
+
+                        self.state.resultChecked = false; // allow the next signal to re-check
+                        self.state.processingRetries += 1;
+
+                        if (self.state.processingRetries <= 5) {
+                            console.log('[Unified] Payment still processing → will re-check');
+                            // Timed re-check (covers desktop, where no further
+                            // visibility signal will arrive after popup close).
+                            setTimeout(function () {
+                                self.runFinalCheck();
+                            }, 3000);
+                            return;
+                        }
+
+                        // Gave the gateway enough time; stop waiting.
+                        console.log('[Unified] Still processing after retries → stop waiting');
+                        self.state.awaitingResult = false;
+                        self.cleanupPopup();
+                        self.showCheckoutError(
+                            response?.message ||
+                            'Your payment is still being processed. Please check your order status before retrying.'
+                        );
+                        self.reset();
+                        return;
+                    }
+
+                    // Definitive non-success (failed / cancelled / abandoned / expired).
+                    console.log('[Unified] Payment failed / incomplete → show message');
 
                     self.state.awaitingResult = false;
 
@@ -688,7 +722,7 @@
          * iOS Safari opens the payment page as a new tab and freezes
          * background-tab timers, so popup.closed polling never fires.
          * When the customer returns to the checkout tab the page
-         * becomes visible again — use that to run the final check.
+         * becomes visible again — that is what we listen for here.
          * ========================================================= */
 
         bindPopupReturnDetection: function () {
@@ -700,35 +734,29 @@
                 if (self.state.resultChecked) return;
                 if (self.state.finalSuccess) return;
 
-                // Only treat this as a genuine "returned to checkout" if the
-                // page had actually been backgrounded first. This guards
-                // against a spurious focus event firing the instant the
-                // payment tab is launched.
-                if (!self.state.wentHidden) return;
+                // Ignore signals that fire in the first moment after launch
+                // (e.g. a stray focus event as the payment tab opens). A real
+                // customer cannot open the payment tab and return this fast.
+                if (Date.now() - self.state.launchTime < 1200) return;
 
                 // Small delay: on iOS the returning tab may need a beat before
-                // the DOM/network is fully live again.
+                // the network stack is fully live again.
                 setTimeout(function () {
                     self.runFinalCheck();
-                }, 300);
+                }, 250);
             };
 
             document.addEventListener('visibilitychange', function () {
-                if (document.visibilityState === 'hidden') {
-                    if (self.state.awaitingResult) {
-                        self.state.wentHidden = true;
-                    }
-                    return;
-                }
                 if (document.visibilityState === 'visible') {
                     maybeCheck();
                 }
             });
 
-            // Belt-and-suspenders for browsers/bfcache that don't reliably
-            // emit visibilitychange when returning to the tab.
-            window.addEventListener('focus', maybeCheck);
+            // iOS restores backgrounded tabs from bfcache → pageshow fires.
             window.addEventListener('pageshow', maybeCheck);
+
+            // Fallback for browsers that emit focus but not visibilitychange.
+            window.addEventListener('focus', maybeCheck);
         },
 
         /* =========================================================
@@ -928,7 +956,8 @@
             this.state.finalSuccess = false;
             this.state.awaitingResult = false;
             this.state.resultChecked = false;
-            this.state.wentHidden = false;
+            this.state.launchTime = 0;
+            this.state.processingRetries = 0;
 
             const $button = $('.wc-block-components-checkout-place-order-button, button[name="woocommerce_checkout_place_order"], #wcf-order-place-btn');
 

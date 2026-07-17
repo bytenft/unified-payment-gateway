@@ -1994,8 +1994,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 	public function unified_enqueue_styles_and_scripts() {
 		if (is_checkout()) {
 			$image_url = plugin_dir_url(dirname(__FILE__)) . 'assets/images/loader.gif';
-			wp_enqueue_style('unified-payment-loader-styles', plugins_url('../assets/css/unified-frontend.css', __FILE__), [], '1.0', 'all');
-			wp_enqueue_script('unified-js', plugins_url('../assets/js/unified.js', __FILE__), ['jquery'], '1.0', true);
+			wp_enqueue_style('unified-payment-loader-styles', plugins_url('../assets/css/unified-frontend.css', __FILE__), [], filemtime(plugin_dir_path(__FILE__) . '../assets/css/unified-frontend.css'), 'all');
+			wp_enqueue_script('unified-js', plugins_url('../assets/js/unified.js', __FILE__), ['jquery'], filemtime(plugin_dir_path(__FILE__) . '../assets/js/unified.js'), true);
 			wp_localize_script('unified-js', 'unified_params', [
 				'ajax_url'       => admin_url('admin-ajax.php'),
 				'checkout_url'   => wc_get_checkout_url(),
