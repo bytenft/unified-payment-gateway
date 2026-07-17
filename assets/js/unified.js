@@ -44,6 +44,26 @@
             this.bindBlockCheckout();
             this.bindInputSanitization();
 
+
+            const self = this;
+
+            // Safari: Detect when returning from payment window
+            window.addEventListener("pageshow", function () {
+                if (self.state.orderId && !self.state.finalSuccess) {
+                    self.checkPopupResult();
+                }
+            });
+
+            document.addEventListener("visibilitychange", function () {
+                if (
+                    document.visibilityState === "visible" &&
+                    self.state.orderId &&
+                    !self.state.finalSuccess
+                ) {
+                    self.checkPopupResult();
+                }
+            });
+
             // Re-bind events if layout structures refresh via multi-step AJAX changes
             $(document.body).on('updated_checkout updated_shipping_method fragments_refreshed fragments_loaded', function () {
                 self.bindClassicCheckout();
@@ -633,6 +653,58 @@
                 );
 
             }, 1000); // small check ONLY for popup close detection
+        },
+
+        checkPopupResult: function () {
+
+            const self = this;
+
+            if (!self.state.orderId) {
+                return;
+            }
+
+            $.post(
+                unified_params.ajax_url,
+                {
+                    action: 'unified_popup_closed_event',
+                    order_id: self.state.orderId,
+                    security: unified_params.unified_nonce
+                },
+                function (response) {
+
+                    const success =
+                        response?.success === true ||
+                        response?.data?.state === 'success';
+
+                    if (success) {
+
+                        if (response?.data?.redirect) {
+                            window.location.replace(response.data.redirect);
+                        }
+
+                        return;
+                    }
+
+                    // Failed / Cancelled
+                    if (response?.data?.redirect) {
+
+                        // Reload checkout page so WooCommerce
+                        // shows the session error notice.
+                        window.location.replace(response.data.redirect);
+
+                        return;
+                    }
+
+                    self.showCheckoutError(
+                        response?.message ||
+                        'Payment failed.'
+                    );
+
+                    self.reset();
+
+                },
+                'json'
+            );
         },
 
         /* =========================================================
