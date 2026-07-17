@@ -44,9 +44,6 @@
             this.bindBlockCheckout();
             this.bindInputSanitization();
 
-
-            const self = this;
-
             // Safari: Detect when returning from payment window
             window.addEventListener("pageshow", function () {
                 if (self.state.orderId && !self.state.finalSuccess) {
