@@ -685,8 +685,8 @@
                 errors.push('Postal code must contain at least 5 characters.');
             } else if (postcode.trim().length > 10) {
                 errors.push('Postal code cannot exceed 10 characters.');
-            } else if (!this.isValidPostCode(postcode.trim())) {
-                errors.push('Please enter a valid postal code.');
+            } else if (!this.isValidPostCode($form)) {
+                errors.push('Please enter a valid ZIP code.');
             }
 
             const phone = this.getPhoneNumber($form);
@@ -707,7 +707,7 @@
                         errors.push('Please enter a valid phone number.');
                     }
                 }
-
+                
             }
 
             const poBox = this.validatePOBox($form);
@@ -935,6 +935,17 @@
             return $('body').find('#billing_city, #city, input[type="text"]').first().val() || '';
         },
 
+        getBillingCountry: function ($form) {
+            if ($form.find('#billing-country').first().val() && $form.find('#billing-country').first().val() !== '') {
+                return $form.find('#billing-country').first().val();
+            } else if ($form.find('#shipping-country').first().val() && $form.find('#shipping-country').first().val() !== '') {
+                return $form.find('#shipping-country').first().val();
+            } else if ($form.find('#billing_country').first().val() && $form.find('#billing_country').first().val() !== '') {
+                return $form.find('#billing_country').first().val();
+            }
+            return $('body').find('#billing-country, #country, input[type="text"]').first().val() || '';
+        },
+
         getBillingPostCode: function ($form) {
             if ($form.find('#billing_postcode').first().val() && $form.find('#billing_postcode').first().val() !== '') {
                 return $form.find('#billing_postcode').first().val();
@@ -948,7 +959,7 @@
             return $('body').find('#billing_postcode, #postcode, input[type="text"]').first().val() || '';
         },
 
-         getBillingAddress1: function ($form) {
+        getBillingAddress1: function ($form) {
             let value;
 
             if ((value = $form.find('#shipping-address_1').first().val()) && value.trim() !== '') {
@@ -989,15 +1000,40 @@
             return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
         },
 
-        isValidPostCode: function (postcode) {
+        isValidPostCode: function ($form) {
+            let postcode = this.getBillingPostCode($form);
+            let country = this.getBillingCountry($form);
+
             if (!postcode) {
                 return false;
             }
 
             postcode = postcode.trim();
 
-            // Allow only letters, numbers and spaces
-            return /^[A-Za-z0-9 ]+$/.test(postcode);
+            const clean = postcode.replace(/\s+/g, '').toUpperCase();
+
+            switch (country) {
+
+                case 'US':
+                    return /^\d{5}(-\d{4})?$/.test(postcode);
+
+                case 'CA':
+                    return /^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(clean);
+
+                case 'GB':
+                    return /^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/.test(clean);
+
+                default: {
+                    const cleanPostcode = clean.replace(/[^A-Z0-9]/g, '');
+
+                    // Reject purely numeric values with 8 or more digits
+                    if (/^\d{8,}$/.test(cleanPostcode)) {
+                        return false;
+                    }
+
+                    return /^(?=.*[A-Z0-9])[A-Z0-9\- ]{3,12}$/i.test(postcode);
+                }
+            }
         },
 
         isValidPhoneNumber: function (p) {
