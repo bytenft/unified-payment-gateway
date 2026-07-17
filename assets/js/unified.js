@@ -563,30 +563,27 @@
                 self.state.popupInterval = null;
             }
 
-            // Local guard + watcher references so the final check runs ONCE
-            // regardless of which signal (below) fires first, and so we can
-            // detach the iOS visibility listeners once resolved.
-            let finalized = false;
-            let visibilityHandler = null;
+            self.state.popupInterval = setInterval(function () {
 
-            const stopWatchers = function () {
-                if (self.state.popupInterval) {
+                 if (self.state.finalSuccess) {
                     clearInterval(self.state.popupInterval);
                     self.state.popupInterval = null;
+                    return;
                 }
-                if (visibilityHandler) {
-                    document.removeEventListener('visibilitychange', visibilityHandler);
-                    window.removeEventListener('pageshow', visibilityHandler);
-                    visibilityHandler = null;
+
+                const popupStillOpen =
+                    self.state.popup &&
+                    !self.state.popup.closed;
+
+                // 👉 wait until popup closes
+                if (popupStillOpen) {
+                    return;
                 }
-            };
 
-            const runFinalCheck = function () {
+                clearInterval(self.state.popupInterval);
+                self.state.popupInterval = null;
 
-                if (finalized || self.state.finalSuccess) return;
-                finalized = true;
-
-                stopWatchers();
+                console.log('[Unified] Popup closed → single final check');
 
                 $.post(
                     unified_params.ajax_url,
@@ -612,6 +609,9 @@
 
                             self.state.finalSuccess = true;
 
+                            clearInterval(self.state.popupInterval);
+                            self.state.popupInterval = null;
+
                             self.cleanupPopup();
 
                             window.location.replace(redirectUrl);
@@ -630,51 +630,9 @@
 
                     },
                     'json'
-                ).fail(function () {
-                    // Network error — let the next signal retry.
-                    finalized = false;
-                });
-            };
+                );
 
-            // ── SIGNAL 1 — Desktop / Android ──────────────────────────────
-            // popup.closed flips to true; the parent's timers keep running,
-            // so this interval observes the closure and resolves.
-            self.state.popupInterval = setInterval(function () {
-
-                if (self.state.finalSuccess || finalized) {
-                    stopWatchers();
-                    return;
-                }
-
-                const popupStillOpen =
-                    self.state.popup &&
-                    !self.state.popup.closed;
-
-                if (popupStillOpen) {
-                    return; // 👉 wait until popup closes
-                }
-
-                console.log('[Unified] Popup closed → final check');
-                runFinalCheck();
-
-            }, 1000);
-
-            // ── SIGNAL 2 — iOS WebKit ─────────────────────────────────────
-            // iOS SUSPENDS this page's timers while the payment tab is in the
-            // foreground, and does NOT reliably flip popup.closed for a
-            // cross-origin popup — so SIGNAL 1 never fires on iOS. The event
-            // iOS DOES deliver when the customer returns to checkout is
-            // visibilitychange (→ visible) / pageshow. That return IS the
-            // resolution signal, so run the same one-time final check then.
-            // Not gated on popup.closed on purpose: that value is the
-            // unreliable bit on iOS.
-            visibilityHandler = function () {
-                if (document.visibilityState !== 'visible') return;
-                console.log('[Unified] Checkout foreground again → final check');
-                runFinalCheck();
-            };
-            document.addEventListener('visibilitychange', visibilityHandler);
-            window.addEventListener('pageshow', visibilityHandler);
+            }, 1000); // small check ONLY for popup close detection
         },
 
         /* =========================================================
