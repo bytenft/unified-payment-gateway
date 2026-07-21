@@ -701,7 +701,7 @@
                     // Remove country code +1 for US numbers before length validation
                     if (cleanedPhone.startsWith('+1') && cleanedPhone.substring(2).length !== 10) {
                         errors.push('Phone number must be exactly 10 digits after the country code.');
-                    } else if (billingCountry == 'US' && cleanedPhone.length !== 10) {
+                    } else if (billingCountry == 'US' && cleanedPhone.length !== 10 && !cleanedPhone.startsWith('+1')) {
                         errors.push('Phone number must be exactly 10 digits.');
                     } else if (cleanedPhone.length < 10) {
                         errors.push('Phone number must contain at least 10 digits.');
