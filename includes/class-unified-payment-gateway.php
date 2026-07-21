@@ -2307,7 +2307,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 	}
 
 	private function hide_gateway($available_gateways, $gateway_id) {
-		unset($available_gateways["unified"]);
 		$GLOBALS['unified_gateway_visibility_' . $this->id] = $available_gateways;
 		return $available_gateways;
 	}
