@@ -2585,10 +2585,10 @@ private function get_routing_sorted_accounts(array $accounts): array {
 		$gateway_id = $this->id;
 		$available_gateways = WC()->payment_gateways->get_available_payment_gateways();
 		if ($all_accounts_limited) {
-			
-			if (!isset($limit_data['max_limit_reached']) || $limit_data['max_limit_reached'] == false) {
-				return $this->hide_gateway($available_gateways, $gateway_id);
-			}
+			return $this->hide_gateway($available_gateways, $gateway_id);
+			// if (!isset($limit_data['max_limit_reached']) || $limit_data['max_limit_reached'] == false) {
+			// 	return $this->hide_gateway($available_gateways, $gateway_id);
+			// }
 		}
 		// Fallback logic if no eligible account found
 		
