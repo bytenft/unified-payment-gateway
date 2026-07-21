@@ -690,6 +690,8 @@
             }
 
             const phone = this.getPhoneNumber($form);
+            const billingCountry = this.getBillingCountry($form);
+
             if (phone && phone.trim()) {
                 const cleanedPhone = phone.replace(/[\s\-().]/g, '');
                 if (/[a-zA-Z]/.test(phone)) {
@@ -699,6 +701,8 @@
                     // Remove country code +1 for US numbers before length validation
                     if (cleanedPhone.startsWith('+1') && cleanedPhone.substring(2).length !== 10) {
                         errors.push('Phone number must be exactly 10 digits after the country code.');
+                    } else if (billingCountry == 'US' && cleanedPhone.length !== 10) {
+                        errors.push('Phone number must be exactly 10 digits.');
                     } else if (cleanedPhone.length < 10) {
                         errors.push('Phone number must contain at least 10 digits.');
                     } else if (cleanedPhone.length > 15) {
