@@ -1281,7 +1281,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 					return $this->build_response(
 						'fail',
-						$last_error_data['message'] ?? 'Payment limit error.',
+						__('This Payment Method has reached its transaction limit for now.  Please try another payment option provided by Merchant to complete your order.', 'unified-payment-gateway'),
 						[],
 						400,
 						$order_id
