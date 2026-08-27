@@ -1266,10 +1266,13 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				if ($last_error_data) {
 
 					if (!empty($last_error_data['max_limit_reached'])) {
-
+						$error_msg = __('The transaction amount exceeds the maximum allowed limit.', 'unified-payment-gateway');
+						if (!$this->is_block_checkout_request() && is_checkout()) {
+							wc_add_notice($error_msg, 'error');
+						}
 						return $this->build_response(
 							'fail',
-							'The transaction amount exceeds the maximum allowed limit.',
+							$error_msg,
 							[],
 							400,
 							$order_id
@@ -1279,9 +1282,13 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 					$order->update_meta_data('_unified_limit_exceeded', true);
 					$order->save();
 
+					$error_msg = __('This Payment Method has reached its transaction limit for now.  Please try another payment option provided by Merchant to complete your order.', 'unified-payment-gateway');
+					if (!$this->is_block_checkout_request() && is_checkout()) {
+						wc_add_notice($error_msg, 'error');
+					}
 					return $this->build_response(
 						'fail',
-						__('This Payment Method has reached its transaction limit for now.  Please try another payment option provided by Merchant to complete your order.', 'unified-payment-gateway'),
+						$error_msg,
 						[],
 						400,
 						$order_id
@@ -1295,14 +1302,18 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 					]
 				);
 
+				$error_msg = __('No eligible payment provider available for this order', 'unified-payment-gateway');
+				if (!$this->is_block_checkout_request() && is_checkout()) {
+					wc_add_notice($error_msg, 'error');
+				}
 				return $this->build_response(
 					'fail',
-					'No eligible payment provider available for this order',
+					$error_msg,
 					[],
 					400,
 					$order_id
 				);
-				}
+			}
 
 				// -------------------------------------------------
 				// 8. PAYMENT REQUEST
@@ -2085,6 +2096,18 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		$this->selected_account_for_display = $selected;
 
 		if (!$selected) {
+			$is_processing_checkout = false;
+			if ( ! empty( $_POST['payment_method'] ) && $_POST['payment_method'] === $gateway_id ) {
+				$is_processing_checkout = true;
+			}
+			if ( defined( 'REST_REQUEST' ) && REST_REQUEST && ! empty( $_SERVER['REQUEST_URI'] ) && strpos( $_SERVER['REQUEST_URI'], '/checkout' ) !== false && $_SERVER['REQUEST_METHOD'] === 'POST' ) {
+				$is_processing_checkout = true;
+			}
+
+			if ($is_processing_checkout) {
+				return $available_gateways;
+			}
+
 			return $this->hide_gateway($available_gateways, $gateway_id);
 		}
 
