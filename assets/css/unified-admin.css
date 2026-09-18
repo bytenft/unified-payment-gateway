@@ -1,36 +1,36 @@
-.voucher-accounts-container {
+.unified-accounts-container {
 	max-width: 600px;
 }
 
-.voucher-accounts-container .title-priority {
+.unified-accounts-container .title-priority {
 	display: flex;
 }
 
-.voucher-accounts-container .title-priority .account-name {
+.unified-accounts-container .title-priority .account-name {
 	width: 70% !important;
 }
 
-.voucher-accounts-container .title-priority .priority-name {
+.unified-accounts-container .title-priority .priority-name {
 	width: 28% !important;
 }
 
-.voucher-accounts-container .rotated {
+.unified-accounts-container .rotated {
 	transform: rotate(180deg);
 }
 
-.voucher-instructions-url,
-.voucher-instructions-url:hover {
+.unified-instructions-url,
+.unified-instructions-url:hover {
 	color: #8264D7;
 }
 
-.voucher-accounts-container .voucher-account {
+.unified-accounts-container .unified-account {
 	margin-bottom: 14px !important;
 	border: 1px solid #C5C5C5;
 	border-radius: 7px;
 	padding: 12px;
 }
 
-.voucher-accounts-container .add-blog {
+.unified-accounts-container .add-blog {
 	align-items: start;
 	flex-wrap: wrap;
 	margin-bottom: 10px;
@@ -38,13 +38,13 @@
 	justify-content: space-between;
 }
 
-.voucher-accounts-container .account-input input {
+.unified-accounts-container .account-input input {
 	width: 100% !important;
 	margin-bottom: 8px !important;
 	margin-right: 8px !important;
 }
 
-.voucher-accounts-container h4 {
+.unified-accounts-container h4 {
 	font-size: 17px !important;
 	margin-top: 0 !important;
 	margin-bottom: 0px !important;
@@ -52,7 +52,7 @@
 	align-items: center !important;
 }
 
-.voucher-accounts-container h4 i {
+.unified-accounts-container h4 i {
 	font-size: 13px !important;
 	margin-right: 6px !important;
 	cursor: pointer;
@@ -67,12 +67,12 @@
 	margin-bottom: 20px !important;
 }
 
-.voucher-accounts-container .action-button {
+.unified-accounts-container .action-button {
 	display: flex !important;
 	align-items: center !important;
 }
 
-.voucher-accounts-container .action-button button {
+.unified-accounts-container .action-button button {
 	color: #6B6B6B;
 	font-size: 14px !important;
 	background: transparent;
@@ -80,7 +80,7 @@
 	cursor: pointer;
 }
 
-.voucher-accounts-container .voucher-account .active-indicator {
+.unified-accounts-container .unified-account .active-indicator {
 	font-size: 14px !important;
 	color: #28A745 !important;
 	background: #E7F5EB !important;
@@ -90,12 +90,12 @@
 	margin-right: 8px;
 }
 
-.voucher-accounts-container .account-input label {
+.unified-accounts-container .account-input label {
 	display: block !important;
 	margin-bottom: 5px !important;
 }
 
-.voucher-accounts-container .add-account-btn .voucher-add-account {
+.unified-accounts-container .add-account-btn .unified-add-account {
 	border-radius: 5px;
 	background: #0A0B21;
 	color: #F5F5F5;
@@ -109,37 +109,37 @@
 	line-height: 19px !important;
 }
 
-.voucher-accounts-container .add-account-btn .voucher-add-account span {
+.unified-accounts-container .add-account-btn .unified-add-account span {
 	font-size: 19px;
 	line-height: 12px;
 }
 
-.voucher-accounts-container .account-info {
+.unified-accounts-container .account-info {
 	display: none;
 	margin-top: 18px !important;
 }
 
-.voucher-accounts-container .account-toggle-btn {
+.unified-accounts-container .account-toggle-btn {
 	color: #6B6B6B;
 	font-size: 17px !important;
 	margin-left: 8px !important;
 }
 
-.voucher-accounts-container .account-checkbox {
+.unified-accounts-container .account-checkbox {
 	font-size: 14px !important;
 	display: flex !important;
 	align-items: center !important;
 	margin: 10px 0 15px !important;
 }
 
-.voucher-accounts-container .account-checkbox input {
+.unified-accounts-container .account-checkbox input {
 	width: 15px !important;
 	height: 15px !important;
 	margin-right: 5px !important;
 	margin-left: 0 !important;
 }
 
-.voucher-accounts-container .title-blog {
+.unified-accounts-container .title-blog {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -175,18 +175,18 @@
 	background-color: #dc3545;
 }
 
-#voucher-sync-status {
+#unified-sync-status {
 	padding-right: 10px;
 }
 
-.voucher-sync-account {
+.unified-sync-account {
 	justify-content: end;
 	align-items: center;
 	display: flex;
 	margin-bottom: 15px !important;
 }
 
-.voucher-sync-account button {
+.unified-sync-account button {
 	border: 1px solid #8264D7 !important;
 	color: #8264D7 !important;
 	background: #8264D717 !important;
@@ -197,11 +197,11 @@
 	cursor: pointer;
 }
 
-.voucher-sync-account .success {
+.unified-sync-account .success {
 	color: #28A745 !important;
 }
 
-.voucher-accounts-container input.error {
+.unified-accounts-container input.error {
 	border: 1px solid #dc3545;
 	background-color: #fff0f0;
 	color: #dc3545;

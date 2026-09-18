@@ -1,12 +1,12 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit; // Exit if accessed directly
 
-function voucher_migrate_old_settings()
+function unified_migrate_old_settings()
 {
 	// Check if option exists under new or old key
-	$beta_accounts = get_option('woocommerce_voucher_payment_gateway_accounts');
+	$beta_accounts = get_option('woocommerce_unified_payment_gateway_accounts');
 	if (!$beta_accounts) {
-		$beta_accounts = get_option('woocommerce_voucher_payment_gateway_accounts');
+		$beta_accounts = get_option('woocommerce_unified_payment_gateway_accounts');
 	}
 
 	if ($beta_accounts) {
@@ -24,16 +24,16 @@ function voucher_migrate_old_settings()
 			}, $beta_accounts);
 
 			// Save updated accounts back
-			update_option('woocommerce_voucher_payment_gateway_accounts', serialize($enhanced_accounts));
-			voucher_trigger_sync();
+			update_option('woocommerce_unified_payment_gateway_accounts', serialize($enhanced_accounts));
+			unified_trigger_sync();
 			return; // Migration complete for beta
 		}
 	}
 
-	// Fallback to legacy `woocommerce_voucher_settings` or `woocommerce_voucher_settings`
-	$old_settings = get_option('woocommerce_voucher_settings');
+	// Fallback to legacy `woocommerce_unified_settings` or `woocommerce_unified_settings`
+	$old_settings = get_option('woocommerce_unified_settings');
 	if (!$old_settings) {
-		$old_settings = get_option('woocommerce_voucher_settings');
+		$old_settings = get_option('woocommerce_unified_settings');
 	}
 	$old_settings = maybe_unserialize($old_settings);
 	if (!$old_settings || !is_array($old_settings)) {
@@ -69,22 +69,22 @@ function voucher_migrate_old_settings()
 		]
 	];
 
-	update_option('woocommerce_voucher_payment_gateway_accounts', serialize($new_accounts));
-	voucher_trigger_sync();
+	update_option('woocommerce_unified_payment_gateway_accounts', serialize($new_accounts));
+	unified_trigger_sync();
 }
 
-function voucher_trigger_sync()
+function unified_trigger_sync()
 {
-	if (get_transient('voucher_sync_lock')) {
+	if (get_transient('unified_sync_lock')) {
 		return; // Already triggered recently
 	}
-	set_transient('voucher_sync_lock', true, 5 * MINUTE_IN_SECONDS);
+	set_transient('unified_sync_lock', true, 5 * MINUTE_IN_SECONDS);
 
-	if (class_exists('VOUCHER_PAYMENT_GATEWAY_Loader')) {
-		$loader = VOUCHER_PAYMENT_GATEWAY_Loader::get_instance();
+	if (class_exists('UNIFIED_PAYMENT_GATEWAY_Loader')) {
+		$loader = UNIFIED_PAYMENT_GATEWAY_Loader::get_instance();
 		if (method_exists($loader, 'handle_cron_event')) {
 			wc_get_logger()->info('Sync account for migration started.', [
-				'source' => 'voucher-payment-gateway',
+				'source' => 'unified-payment-gateway',
 				'context' => ['sync_id' => uniqid('migrate_', true)]
 			]);
 			$loader->handle_cron_event();
@@ -92,26 +92,26 @@ function voucher_trigger_sync()
 	}
 }
 
-function voucher_on_plugin_activate() {
+function unified_on_plugin_activate() {
 	// Migrate settings
-	if (function_exists('voucher_migrate_old_settings')) {
-		voucher_migrate_old_settings();
+	if (function_exists('unified_migrate_old_settings')) {
+		unified_migrate_old_settings();
 	}
 
 	// Activate cron
-	if (class_exists('VOUCHER_PAYMENT_GATEWAY_Loader')) {
-		VOUCHER_PAYMENT_GATEWAY_Loader::get_instance()->activate_cron_job();
-		VOUCHER_PAYMENT_GATEWAY_Loader::get_instance()->voucher_send_plugin_status(1, 0);
+	if (class_exists('UNIFIED_PAYMENT_GATEWAY_Loader')) {
+		UNIFIED_PAYMENT_GATEWAY_Loader::get_instance()->activate_cron_job();
+		UNIFIED_PAYMENT_GATEWAY_Loader::get_instance()->unified_send_plugin_status(1, 0);
 	}
 }
 
-function voucher_on_plugin_deactivate() {
+function unified_on_plugin_deactivate() {
 	// Deactivate cron
-	if (class_exists('VOUCHER_PAYMENT_GATEWAY_Loader')) {
-		VOUCHER_PAYMENT_GATEWAY_Loader::get_instance()->deactivate_cron_job();
-		VOUCHER_PAYMENT_GATEWAY_Loader::get_instance()->voucher_send_plugin_status(0, 0);
+	if (class_exists('UNIFIED_PAYMENT_GATEWAY_Loader')) {
+		UNIFIED_PAYMENT_GATEWAY_Loader::get_instance()->deactivate_cron_job();
+		UNIFIED_PAYMENT_GATEWAY_Loader::get_instance()->unified_send_plugin_status(0, 0);
 	}
 }
 
-register_activation_hook(VOUCHER_PAYMENT_GATEWAY_FILE, 'voucher_on_plugin_activate');
-register_deactivation_hook(VOUCHER_PAYMENT_GATEWAY_FILE, 'voucher_on_plugin_deactivate');
+register_activation_hook(UNIFIED_PAYMENT_GATEWAY_FILE, 'unified_on_plugin_activate');
+register_deactivation_hook(UNIFIED_PAYMENT_GATEWAY_FILE, 'unified_on_plugin_deactivate');

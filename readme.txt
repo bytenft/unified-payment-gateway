@@ -1,17 +1,17 @@
-=== Voucher Payment Gateway ===
-Contributors: Voucher
-Tags: woocommerce, payment gateway, fiat, Voucher
+=== Unified Payment Gateway ===
+Contributors: Unified
+Tags: woocommerce, payment gateway, fiat, Unified
 Requires at least: 5.0
 Tested up to: 7.1
 Stable tag: 1.0.3
 License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
-The Voucher Payment Gateway plugin for WooCommerce 8.9+ allows you to accept fiat payments to sell products on your WooCommerce store.
+The Unified Payment Gateway plugin for WooCommerce 8.9+ allows you to accept fiat payments to sell products on your WooCommerce store.
 
 == Description ==
 
-This plugin integrates Voucher Payment Gateway with WooCommerce, enabling you to accept fiat payments. 
+This plugin integrates Unified Payment Gateway with WooCommerce, enabling you to accept fiat payments. 
 
 == Installation ==
 
@@ -28,174 +28,41 @@ Visit the DFin website and log in to your account. Navigate to Developer Setting
 == Changelog ==
 
 = 1.0.3 =
-* Updated version number and configuration settings.
-
-= 1.0.21 =
-* Updated the checkout flow to open the payment link directly without requiring the customer confirmation popup.
-* Improved payment link opening and checkout stability across browsers.
-* Fixed invalid order issues during the checkout and payment flow.
-* Improved handling of existing customer phone numbers and date of birth (DOB) during checkout.
-* Fixed popup blocker issues when opening the payment link.
-* Resolved compatibility issues with the PixelYourSite (PYS) plugin.
-
-= 1.0.20 =
-* Fixed popup blocker issues on mobile browsers.
-* Improved payment flow compatibility on mobile Safari and Chrome.
-
-= 1.0.19 =
-* Removed generic SQL injection check to prevent conflicts with third-party plugins.
-* Improved customer account confirmation and new account creation flow during checkout.
-
-= 1.0.18 =
-* Fixed an issue where invalid or stale orders could interfere with the checkout flow.
-* Fixed an issue where the payment gateway remained visible when no eligible merchant account was available by automatically hiding the gateway.
-
-= 1.0.17 =
-* Enables merchants using multiple Voucher accounts to track sales separately.
-* Fix FunnelKit Compatibility Issue Causing Shipping Address Override
-
-= 1.0.16 =
-* Updated referrer URL handling in the payment flow.
-* Improved popup redirect behavior using referrer URL enhancements.
-* PO Box Address Validation and Redirection Conflict with Other Payment Gateways.
-
-= 1.0.15 =
-* Resolved the WooCommerce database version mismatch issue.
-
-= 1.0.14 =
-* Improved payment order synchronization logic for better reliability and consistency between payment gateway and WooCommerce orders.
-* Optimized payment status handling to reduce race conditions and ensure accurate final order states.
-* Minor code improvements for enhanced stability and maintainability.
-* W provider support
-
-= 1.0.13 =
-* Payment Gateway Visibility Fix: Resolved an issue where when the payment limit was reached, other available payment methods were not displayed correctly.
-* PO Box Validation Improvements: Enhanced billing address validation to prevent PO Box entries where restricted, improving address accuracy and reducing failed or unsupported transactions.
-
-= 1.0.12 =
-* Enhanced phone number normalization and validation with improved error messages.
-* Ensured failed, cancelled, or expired orders now update their status correctly in WordPress/WooCommerce.
-
-= 1.0.11 =
-* Hide plugin Fix: Hide Plugin Fix
-
-= 1.0.10 =
-* Update: Removed transaction limit check logic so the plugin remains available regardless of transaction limits.
-
-= 1.0.9 =
-* Blank Page Fix: Resolved a white screen issue caused by improper initialization and unexpected output.
-
-= 1.0.8 =
-* Fatal Error Fix: Wrapped wc_clear_notices() with function existence checks to prevent PHP fatal errors when WooCommerce is not loaded.
-
-= 1.0.7 =
-* Removed country-based phone number restrictions to support international customers.
-* Added compatibility with WooCommerce block-based checkout.
-* Minor internal optimizations and validation refinements.
-
-= 1.0.6 =
-* Fixed expired and manually cancelled order redirection to the Success Page with correct status in the portal.
-* Improved validation messages to specify exactly what needs to be corrected (email, address, etc.).
-* Updated the default plugin title for better clarity.
-* Added validation to prevent PO Box addresses during checkout.
-
-= 1.0.5 =
-* Updated plugin initialization hook priority on `plugins_loaded` from 11 to 10 for improved load order.
-* Updated the default plugin title.
-
-= 1.0.4 =
-* Enhanced phone number normalization and validation with improved error messages.
-
-= 1.0.3 =
-* Added **Sardine payment support** to enhance security, compliance, and fraud protection for transactions.
+* New voucher checkout: placing an order emails the customer a redeemable voucher, and the payment page opens only when they use it. No payment link is opened during checkout.
+* The order confirmation shown at checkout now includes the voucher reference and the products ordered.
+* Ordered products, with their images, are sent with the voucher so customers can see what they are paying for.
+* Fixed payment account settings not being read consistently across the plugin.
 
 = 1.0.2 =
-* Added support for multiple currencies to enhance payment flexibility.
+* Improved failed payment handling by preventing duplicate payment failure notices when redirecting customers back to the checkout page.
+* Expanded PO Box detection to support additional address variations such as `POB`, `Postal Box`, and `Post Office Box`.
+* Enhanced billing address validation by requiring a minimum of 5 characters and rejecting numeric-only street addresses to help prevent invalid or incomplete address submissions.
 
 = 1.0.1 =
-* Adjusted the default plugin title for improved clarity.
-* Resolved an issue where payment links were not functioning correctly on iOS devices.
+* Resolved mobile number validation issues during checkout.
+* Fixed ZIP/postal code validation to support valid customer inputs.
+* Corrected PO Box address validation.
+* Fixed invalid API key validation and improved error handling.
 
 = 1.0.0 =
 * Initial release.
 
 == Upgrade Notice ==
 
-= 1.0.21 =
-* Updated the checkout and payment flow for improved stability.
-* Fixed invalid order issues and popup blocker issues.
-* Improved handling of existing customer phone numbers and DOB.
-* Resolved compatibility issues with the PixelYourSite (PYS) plugin.
-
-= 1.0.20 =
-* Improved mobile checkout compatibility and popup handling.
-
-= 1.0.19 =
-* Removed generic SQL injection check to prevent conflicts with third-party plugins.
-* Recommended update for improved customer account handling and checkout reliability.
-
-= 1.0.18 =
-This update improves checkout stability by fixing invalid order handling and ensuring the payment gateway is automatically hidden when no eligible merchant account is available.
-
-= 1.0.17 =
-* Restores account-specific payment titles on checkout, allowing sales and reporting tools to distinguish transactions by Voucher account. Update recommended for merchants using multiple accounts.
-* Fix FunnelKit Compatibility Issue Causing Shipping Address Override
-
-= 1.0.16 =
-Improved compatibility with merchant sites by enhancing referrer URL management and resolving PO Box address validation and redirection conflicts with other payment gateways.
-
-= 1.0.15 =
-Resolved the WooCommerce database version mismatch issue.
-
-= 1.0.14 =
-This update improves payment synchronization, enhances order status reliability, and adds support for the W payment provider. It also fixes potential inconsistencies in order status updates to ensure more reliable payment processing and accurate order tracking.
-
-= 1.0.13 =
-This update fixes a critical issue where available payment methods were not displayed when limits were reached and improves billing address validation by blocking unsupported PO Box entries. It is recommended to update immediately for improved checkout reliability.
-
-= 1.0.12 =
-* Update to this version for improved phone number validation and better error messages during checkout.
-* Ensured failed, cancelled, or expired orders now update their status correctly in WordPress/WooCommerce.
-
-= 1.0.11 =
-* Hide plugin Fix: Hide Plugin Fix
-
-= 1.0.10 =
-* Removed the transaction limit check logic from the plugin so it remains available regardless of transaction limits.
-
-= 1.0.9 =
-* Fixed a blank page (white screen) issue that could occur due to unexpected output or initialization conflicts. Update recommended for improved stability.
-
-= 1.0.8 =
-* Fixed a PHP fatal error caused by wc_clear_notices() in non-checkout or admin pages.
-
-= 1.0.7 =
-* Improves global phone number support and adds compatibility with WooCommerce block-based checkout. Recommended update.
-
-= 1.0.6 =
-* Expired and manually cancelled orders now redirect correctly with proper status.
-* Validation messages now specify exactly what needs to be corrected.
-* Default plugin title updated for clarity.
-* Added validation to prevent PO Box addresses during checkout.
-
-= 1.0.5 =
-* Recommended update to ensure correct plugin load order and updated default title.
-
-= 1.0.4 =
-* Update to this version for improved phone number validation and better error messages during checkout.
-
 = 1.0.3 =
-* Update to this version to enable Sardine integration for improved fraud prevention and secure transaction processing.
+* Switches checkout to the voucher flow: customers receive a voucher by email and complete payment when they open it. Re-check your payment account settings after updating.
 
 = 1.0.2 =
-* Introduces multi-currency support, allowing greater flexibility and a smoother checkout experience for international customers.
+* This release improves the payment experience by preventing duplicate payment failure notices during failed payment redirects.
+* Enhanced PO Box validation by detecting additional address variations, including POB, Postal Box, and Post Office Box, to help prevent unsupported shipping addresses during checkout.
+* Strengthened billing address validation by requiring a minimum of 5 characters and rejecting numeric-only street addresses to help ensure valid and complete address information during checkout.
 
 = 1.0.1 =
-* This update refines the default plugin title and resolves iOS payment link issues to ensure smoother checkout experiences.
+* This release improves the payment experience by resolving mobile number, ZIP/postal code, and PO Box validation issues. It also fixes invalid API key handling to improve plugin reliability and ensure a smoother checkout experience.
 
 = 1.0.0 =
 Initial release.
 
 == Support ==
 
-For support, visit: [https://pay.voucher.xyz/contact-us](https://pay.voucher.xyz/contact-us)
+For support, visit: [https://rt.app/contact-us](https://rt.app/contact-us)

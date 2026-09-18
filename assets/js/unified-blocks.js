@@ -1,4 +1,4 @@
-console.log('voucher-blocks.js loaded at', new Date().toISOString());
+console.log('unified-blocks.js loaded at', new Date().toISOString());
 (function () {
     const { registerPaymentMethod } = window.wc?.wcBlocksRegistry || {};
     const { createElement, RawHTML } = window.wp?.element || {};
@@ -8,25 +8,25 @@ console.log('voucher-blocks.js loaded at', new Date().toISOString());
     }
 
     const settings =
-        window.wc?.wcSettings?.getPaymentMethodData?.('voucher') || {};
+        window.wc?.wcSettings?.getPaymentMethodData?.('unified') || {};
 
-    const label = settings.title || 'Voucher';
+    const label = settings.title || 'Unified';
     const description = settings.description || '';
 
     const methodConfig = {
-        name: settings.id || 'voucher',
+        name: settings.id || 'unified',
         label,
         ariaLabel: label,
 
         content: createElement(
             'div',
-            { className: 'voucher-description' },
+            { className: 'unified-description' },
             createElement(RawHTML, {}, description)
         ),
 
         edit: createElement(
             'div',
-            { className: 'voucher-edit' },
+            { className: 'unified-edit' },
             label
         ),
 

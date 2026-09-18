@@ -4,7 +4,7 @@ if (!defined('ABSPATH')) {
 	exit;
 }
 
-class Voucher_Payment_Gateway_Logger {
+class Unified_Payment_Gateway_Logger {
 
 	private static function get_logger()
 	{
@@ -18,7 +18,7 @@ class Voucher_Payment_Gateway_Logger {
 	private static function format_context($context)
 	{
 		$entry = [
-			'source' => 'voucher-payment-gateway'
+			'source' => 'unified-payment-gateway'
 		];
 
 		if (!is_array($context)) {

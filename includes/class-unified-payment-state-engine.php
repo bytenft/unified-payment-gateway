@@ -1,7 +1,7 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
-class Voucher_Payment_State_Engine
+class Unified_Payment_State_Engine
 {
     const LOCK_TTL  = 12;
     const EVENT_TTL = 86400;
@@ -22,7 +22,7 @@ class Voucher_Payment_State_Engine
 
         self::mark_event($order_id, $event_id);
 
-        $lock_key = "voucher_lock_{$order_id}";
+        $lock_key = "unified_lock_{$order_id}";
         if (get_transient($lock_key)) {
             return self::safe_response($order, 'locked_skip');
         }
@@ -144,7 +144,7 @@ class Voucher_Payment_State_Engine
             'payment_token' => $payload['payment_token'] ?? null,
         ];
 
-        $order->update_meta_data('_voucher_timeline', $timeline);
+        $order->update_meta_data('_unified_timeline', $timeline);
         $order->save();
     }
 
@@ -163,13 +163,13 @@ class Voucher_Payment_State_Engine
         // stable idempotency key (VERY IMPORTANT)
         $state_lock_key = md5($order_id . '|' . $state . '|' . $payment_token);
 
-        $last_lock = $order->get_meta('_voucher_state_lock');
+        $last_lock = $order->get_meta('_unified_state_lock');
 
         if ($last_lock === $state_lock_key) {
             return;
         }
 
-        $order->update_meta_data('_voucher_state_lock', $state_lock_key);
+        $order->update_meta_data('_unified_state_lock', $state_lock_key);
 
         $wc_status = match ($state) {
             'success'    => self::get_success_wc_status(),
@@ -183,16 +183,16 @@ class Voucher_Payment_State_Engine
 
         $order->update_status($wc_status, '');
 
-        $order->update_meta_data('_voucher_state', $state);
-        $order->update_meta_data('_voucher_last_event', $event_type);
-        $order->update_meta_data('_voucher_last_event_time', current_time('mysql'));
+        $order->update_meta_data('_unified_state', $state);
+        $order->update_meta_data('_unified_last_event', $event_type);
+        $order->update_meta_data('_unified_last_event_time', current_time('mysql'));
 
         if (!empty($payment_token)) {
-            $order->update_meta_data('_voucher_pay_id', $payment_token);
+            $order->update_meta_data('_unified_pay_id', $payment_token);
         }
 
         if ($state === 'success') {
-            $order->update_meta_data('_voucher_payment_success', 'yes');
+            $order->update_meta_data('_unified_payment_success', 'yes');
         }
 
         $order->save();
@@ -200,9 +200,9 @@ class Voucher_Payment_State_Engine
 
     private static function get_timeline($order)
     {
-        $data = $order->get_meta('_voucher_timeline', true);
+        $data = $order->get_meta('_unified_timeline', true);
         if (empty($data)) {
-            $data = $order->get_meta('_voucher_timeline', true);
+            $data = $order->get_meta('_unified_timeline', true);
         }
 
         if (empty($data)) {
@@ -283,7 +283,7 @@ class Voucher_Payment_State_Engine
         /**
          * FAILED NOTES
          */
-        $already_synced = (int) ($order->get_meta('_voucher_failed_note_count') ?: $order->get_meta('_voucher_failed_note_count'));
+        $already_synced = (int) ($order->get_meta('_unified_failed_note_count') ?: $order->get_meta('_unified_failed_note_count'));
 
         $actual_failed_count = count($failed_events);
 
@@ -305,7 +305,7 @@ class Voucher_Payment_State_Engine
             }
 
             $order->update_meta_data(
-                '_voucher_failed_note_count',
+                '_unified_failed_note_count',
                 $actual_failed_count
             );
         }
@@ -315,8 +315,8 @@ class Voucher_Payment_State_Engine
          */
         if (
             $success_event &&
-            !$order->get_meta('_voucher_success_note_added') &&
-            !$order->get_meta('_voucher_success_note_added')
+            !$order->get_meta('_unified_success_note_added') &&
+            !$order->get_meta('_unified_success_note_added')
         ) {
 
             $order->add_order_note(
@@ -328,7 +328,7 @@ class Voucher_Payment_State_Engine
             );
 
             $order->update_meta_data(
-                '_voucher_success_note_added',
+                '_unified_success_note_added',
                 'yes'
             );
         }
@@ -338,8 +338,8 @@ class Voucher_Payment_State_Engine
          */
         if (
             $cancel_event &&
-            !$order->get_meta('_voucher_cancel_note_added') &&
-            !$order->get_meta('_voucher_cancel_note_added')
+            !$order->get_meta('_unified_cancel_note_added') &&
+            !$order->get_meta('_unified_cancel_note_added')
         ) {
 
             $order->add_order_note(
@@ -351,7 +351,7 @@ class Voucher_Payment_State_Engine
             );
 
             $order->update_meta_data(
-                '_voucher_cancel_note_added',
+                '_unified_cancel_note_added',
                 'yes'
             );
         }
@@ -380,7 +380,7 @@ class Voucher_Payment_State_Engine
         }
 
         return sprintf(
-            '<strong>Voucher Gateway</strong><br><br>
+            '<strong>Unified Gateway</strong><br><br>
             <strong>%s</strong><br><br>
             <strong>Payment ID:</strong> %s<br>
             <strong>Updated Via:</strong> %s<br>
@@ -448,7 +448,7 @@ class Voucher_Payment_State_Engine
      * ========================================================= */
     private static function get_state($order)
     {
-        return $order->get_meta('_voucher_state') ?: $order->get_meta('_voucher_state') ?: 'pending';
+        return $order->get_meta('_unified_state') ?: $order->get_meta('_unified_state') ?: 'pending';
     }
 
     /* =========================================================
@@ -456,9 +456,9 @@ class Voucher_Payment_State_Engine
      * ========================================================= */
     private static function get_success_wc_status()
     {
-        $settings = get_option('woocommerce_voucher_settings', []);
+        $settings = get_option('woocommerce_unified_settings', []);
         if (empty($settings)) {
-            $settings = get_option('woocommerce_voucher_settings', []);
+            $settings = get_option('woocommerce_unified_settings', []);
         }
         $status = $settings['order_status'] ?? 'processing';
 
@@ -481,12 +481,12 @@ class Voucher_Payment_State_Engine
 
     private static function is_duplicate_event($order_id, $event_id)
     {
-        return get_transient("voucher_event_{$order_id}_{$event_id}") !== false;
+        return get_transient("unified_event_{$order_id}_{$event_id}") !== false;
     }
 
     private static function mark_event($order_id, $event_id)
     {
-        set_transient("voucher_event_{$order_id}_{$event_id}", 1, self::EVENT_TTL);
+        set_transient("unified_event_{$order_id}_{$event_id}", 1, self::EVENT_TTL);
     }
 
     /* =========================================================

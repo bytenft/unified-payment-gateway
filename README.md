@@ -1,11 +1,11 @@
-# Voucher Payment Gateway
+# Unified Payment Gateway
 
-The Voucher Payment Gateway plugin for WooCommerce 8.9+ allows you to accept fiat payments to sell products on your WooCommerce store.
+The Unified Payment Gateway plugin for WooCommerce 8.9+ allows you to accept fiat payments to sell products on your WooCommerce store.
 
 ## Plugin Information
 
-**Contributors:** Voucher  
-**Tags:** woocommerce, payment gateway, fiat, Voucher  
+**Contributors:** Unified  
+**Tags:** woocommerce, payment gateway, fiat, Unified  
 **Requires at least:** 6.2  
 **Tested up to:** 6.9  
 **Stable tag:** 1.0.3  
@@ -14,11 +14,11 @@ The Voucher Payment Gateway plugin for WooCommerce 8.9+ allows you to accept fia
 
 ## Support
 
-For any issues or enhancement requests with this plugin, please contact the Voucher support team. Ensure you provide your plugin, WooCommerce, and WordPress version where applicable to expedite troubleshooting.
+For any issues or enhancement requests with this plugin, please contact the Unified support team. Ensure you provide your plugin, WooCommerce, and WordPress version where applicable to expedite troubleshooting.
 
 ## Getting Started
 
-1. Obtain your API keys from your Voucher dashboard in your Developer Settings - API Keys.
+1. Obtain your API keys from your Unified dashboard in your Developer Settings - API Keys.
 2. Follow the plugin installation instructions below.
 3. You are ready to take payments in your WooCommerce store!
 
@@ -33,7 +33,7 @@ For any issues or enhancement requests with this plugin, please contact the Vouc
 
 ## 1. Download Plugin from GitHub
 
-- Visit the GitHub repository for the Voucher Payment Gateway plugin at [GitHub Repository URL](https://github.com/voucher/voucher-payment-gateway).
+- Visit the GitHub repository for the Unified Payment Gateway plugin at [GitHub Repository URL](https://github.com/voucher/unified-payment-gateway).
 - Download the plugin ZIP file to your local machine.
 
 ## 2. Install the Plugin in WordPress
@@ -52,20 +52,20 @@ For any issues or enhancement requests with this plugin, please contact the Vouc
   Log in to your WordPress Admin Dashboard.
 - **Navigate to Installed Plugins:**
   Go to `Plugins` > `Installed Plugins`.
-- **Activate Voucher Payment Gateway:**
-  - Locate the Voucher Payment Gateway plugin in the list.
+- **Activate Unified Payment Gateway:**
+  - Locate the Unified Payment Gateway plugin in the list.
   - Click `Activate` to enable the plugin.
 
-## 4. Obtain API Keys from Voucher Developer Settings Dashboard
+## 4. Obtain API Keys from Unified Developer Settings Dashboard
 
-- **Log in to Voucher Account:**
-  Visit the Voucher website and log in to your account.
+- **Log in to Unified Account:**
+  Visit the Unified website and log in to your account.
 - **Navigate to Developer Settings to get API Keys:**
   Once logged in, find and access the Developer Settings.
 - **Generate or Retrieve API Keys:**
   If API keys are not already generated, you can create new ones.
   Locate the API Keys or Credentials section.
-  Generate or retrieve the required API keys (e.g., Public Key, Secret Key) needed for integration with the Voucher Payment Gateway plugin.
+  Generate or retrieve the required API keys (e.g., Public Key, Secret Key) needed for integration with the Unified Payment Gateway plugin.
 
 ## 5. Update API Keys in WooCommerce Settings
 
@@ -74,14 +74,14 @@ For any issues or enhancement requests with this plugin, please contact the Vouc
   Go to `WooCommerce` > `Settings`.
 - **Access the Payments Tab:**
   Click on the `Payments` tab at the top of the settings page.
-- **Select Voucher Payment Gateway:**
-  Scroll down to find and select the Voucher Payment Gateway among the available payment methods.
+- **Select Unified Payment Gateway:**
+  Scroll down to find and select the Unified Payment Gateway among the available payment methods.
 
 - **Add Plugin General Details:**
 
-  - **Title** : Voucher Payment Gateway
+  - **Title** : Unified Payment Gateway
     Description
-  - **Description** : Secure payments with Voucher Payment Gateway.
+  - **Description** : Secure payments with Unified Payment Gateway.
   - **Enable/Disable Sandbox Mode** : Toggle sandbox mode per account.
   - **Payment Accounts (Add Multiple Accounts)** :
     - **Adding a New Account**
@@ -98,7 +98,7 @@ For any issues or enhancement requests with this plugin, please contact the Vouc
 - **Save Changes:**
   Click `Save changes` at the bottom of the page to update and save your API key settings.
 
-## 6. Place Order via Voucher Payment Option
+## 6. Place Order via Unified Payment Option
 
 - **Visit Your Store Page and Add Products to Cart:**
   Navigate to your WordPress site's store page.
@@ -108,15 +108,15 @@ For any issues or enhancement requests with this plugin, please contact the Vouc
   Go to your WordPress site's checkout page to review your order details.
 
 - **Check Available Payment Methods:**
-  Ensure that the Voucher Payment Gateway option is visible among the available payment methods listed on the checkout page.
+  Ensure that the Unified Payment Gateway option is visible among the available payment methods listed on the checkout page.
 
 - **Verify Integration:**
-  Confirm that customers can select the Voucher Payment Gateway as a payment option when placing their orders.
+  Confirm that customers can select the Unified Payment Gateway as a payment option when placing their orders.
 
 ## 7. Popup Window for Payment
 
 - **Secure Payment Processing:**
-  Upon selecting Voucher, a secure popup window will open for payment processing.
+  Upon selecting Unified, a secure popup window will open for payment processing.
 
 ## 8. Complete the Payment Process
 
@@ -134,110 +134,41 @@ For any issues or enhancement requests with this plugin, please contact the Vouc
 - **Verify Order Status:**
   Log in to your WordPress Admin Dashboard.
   Navigate to `WooCommerce` > `Orders` to view all orders.
-  Check for the latest orders placed using the Voucher Payment Gateway to verify their status.
+  Check for the latest orders placed using the Unified Payment Gateway to verify their status.
 
 ## Documentation
 
-The official documentation for this plugin is available at: [https://pay.voucher.xyz/docs/wordpress-plugin](https://pay.voucher.xyz/docs/wordpress-plugin)
+The official documentation for this plugin is available at: [https://qa-rt.unified.xyz/docs/wordpress-plugin](https://qa-rt.unified.xyz/docs/wordpress-plugin)
 
 ## Changelog
 
-### Version 1.0.21
-
-- Updated the checkout flow to open the payment link directly without requiring the customer confirmation popup.
-- Improved payment link opening and checkout stability across browsers.
-- Fixed invalid order issues during the checkout and payment flow.
-- Improved handling of existing customer phone numbers and date of birth (DOB) during checkout.
-- Fixed popup blocker issues when opening the payment link.
-- Resolved compatibility issues with the PixelYourSite (PYS) plugin.
-
-### Version 1.0.20
-- Fixed popup blocker issues on mobile browsers.
-
-### Version 1.0.19
-- Removed generic SQL injection check to prevent conflicts with third-party plugins.
-- Improved customer account confirmation and new account creation flow during checkout.
-
-### Version 1.0.18
-- Fixed an issue where invalid or stale orders could interfere with the checkout flow.
-- Fixed an issue where the payment gateway remained visible when no eligible merchant account was available by automatically hiding the plugin.
-
-### Version 1.0.17
-- Enables merchants to track sales separately for individual Voucher accounts.
-- Fix FunnelKit Compatibility Issue Causing Shipping Address Override
-
-### Version 1.0.16
-- Updated referrer URL handling in the payment flow.
-- Improved popup redirect behavior using referrer URL enhancements.
-- PO Box Address Validation and Redirection Conflict with Other Payment Gateways.
-
-### Version 1.0.15
-- Resolved the WooCommerce database version mismatch issue.
-
-### Version 1.0.14
-- Improved payment order synchronization logic for better reliability and consistency between payment gateway and WooCommerce orders.
-- Optimized handling of payment status updates to reduce race conditions and ensure accurate final order states.
-- Minor code improvements for better stability and maintainability.
-- W provider support
-
-### Version 1.0.13
-- **Payment Gateway Visibility Fix:** Resolved an issue where when the payment limit was reached, other available payment methods were not displayed correctly.
-- **PO Box Validation Improvements:** Enhanced billing address validation to prevent PO Box entries where restricted, improving address accuracy and reducing failed or unsupported transactions.
-
-### Version 1.0.12
-- **Phone Number Validation:** Enhanced phone number normalization and validation with improved error messages.
-- **Order Status Handling:** Ensured failed, cancelled, or expired orders now update their status correctly in WordPress/WooCommerce.
-
-### Version 1.0.11
-- **Hide plugin Fix:** Hide Plugin Fix
-
-### Version 1.0.10
-- **Transaction Limit Check Removed:** Removed the transaction limit validation logic so the plugin remains available without restrictions based on transaction limits.
-
-### Version 1.0.9
-- **Blank Page (White Screen) Fix:** Resolved an issue causing a blank white screen in certain environments due to unexpected output and initialization conflicts.
-
-### Version 1.0.8
-- **Fatal Error Fix:** Wrapped `wc_clear_notices()` with function existence checks to prevent PHP fatal errors when WooCommerce is not loaded.
-
-### Version 1.0.7
-- **Global Phone Support:** Removed country-based phone number restrictions to allow international customers during checkout.
-- **Block-Based Checkout Support:** Added compatibility with WooCommerce block-based checkout for seamless integration with the new checkout experience.
-- **Stability Improvements:** Minor internal optimizations and validation refinements for improved reliability.
-
-### Version 1.0.6
-- **Redirection Fixes:** Fixed expired and manually cancelled order redirection to the Success Page with correct status in the portal.
-- **Validation Improvements:** Validation messages now specify exactly what is incorrect (email, address, etc.) for better customer guidance.
-- **Default Title Updated:** Modified the default plugin title for better clarity and consistency.
-- **PO Box Restriction:** Added validation to prevent PO Box addresses during checkout to ensure compliance with payment processing requirements.
-
-### Version 1.0.5
-- **Initialization Priority Updated:** Adjusted plugin initialization hook priority on `plugins_loaded` from `11` to `10` to ensure proper load order.
-- **Default Title Updated:** Modified the default plugin title for improved clarity and consistency.
-
-### Version 1.0.4
-- **Phone Number Validation:** Enhanced phone number normalization and validation with improved error messages.
-
 ### Version 1.0.3
-- **Sardine Integration:** Added support for **Sardine payments**, providing enhanced fraud protection and compliance for secure transactions.
+
+- **Voucher Checkout:** Placing an order now emails the customer a redeemable voucher, and the payment page opens only when they use it. No payment link is opened during checkout.
+- **Order Confirmation:** The order confirmation shown at checkout now includes the voucher reference and the products ordered.
+- **Order Items:** Ordered products, with their images, are sent with the voucher so customers can see what they are paying for.
+- **Account Settings:** Fixed payment account settings not being read consistently across the plugin.
 
 ### Version 1.0.2
-
-- **Currency Support:** Added multi-currency support to provide greater flexibility and improve the checkout experience for international customers.
+- Failed Payment Redirect: Improved the failed payment flow by redirecting customers back to the checkout page without displaying a duplicate payment failure notice, preventing redundant error messages.
+- PO Box Validation: Expanded PO Box detection to support additional address variations such as `POB`, `Postal Box`, and `Post Office Box`.
+- Address Validation: Added enhanced billing address validation by enforcing a minimum length of 5 characters and preventing numeric-only address entries to reduce invalid or incomplete address submissions during checkout.
 
 ### Version 1.0.1
 
-- **Updated Default Title:** Adjusted the default plugin title for improved clarity.
-- **IOS Payment Link Fix:** Resolved an issue where payment links were not functioning correctly on iOS devices.
+- **Mobile Number Validation:** Resolved issues with mobile number validation during checkout.
+- **ZIP/Postal Code Validation:** Fixed ZIP/postal code validation to accept valid customer inputs.
+- **PO Box Validation:** Corrected PO Box address validation to improve address verification.
+- **Invalid API Key Handling:** Fixed invalid API key validation and improved error handling for better reliability.
 
 ### Version 1.0.0 (Initial Release)
 
-- **Initial Release:** Launched the Voucher Payment Gateway plugin with core payment integration functionality for WooCommerce.
+- **Initial Release:** Launched the Unified Payment Gateway plugin with core payment integration functionality for WooCommerce.
 
 ## Support
 
-For customer support, visit: [https://pay.voucher.xyz/contact-us](https://pay.voucher.xyz/contact-us)
+For customer support, visit: [https://rt.app/contact-us](https://rt.app/contact-us)
 
-## Why Choose Voucher Payment Gateway?
+## Why Choose Unified Payment Gateway?
 
-With the Voucher Payment Gateway, you can easily transfer fiat payments to sell products. Choose Voucher Payment Gateway as your WooCommerce payment gateway to access your funds quickly through a powerful and secure payment engine provided by Voucher.
+With the Unified Payment Gateway, you can easily transfer fiat payments to sell products. Choose Unified Payment Gateway as your WooCommerce payment gateway to access your funds quickly through a powerful and secure payment engine provided by Unified.
