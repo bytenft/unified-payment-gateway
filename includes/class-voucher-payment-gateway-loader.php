@@ -5,13 +5,13 @@ if (!defined('ABSPATH')) {
 
 // Include the configuration file
 require_once plugin_dir_path(__FILE__) . 'config.php';
-require_once plugin_dir_path(__FILE__) . 'class-unified-payment-state-engine.php';
-require_once plugin_dir_path(__FILE__) . 'class-unified-payment-logger.php';
+require_once plugin_dir_path(__FILE__) . 'class-voucher-payment-state-engine.php';
+require_once plugin_dir_path(__FILE__) . 'class-voucher-payment-logger.php';
 /**
- * Class UNIFIED_PAYMENT_GATEWAY_Loader
- * Handles the loading and initialization of the Unified Payment Gateway plugin.
+ * Class VOUCHER_PAYMENT_GATEWAY_Loader
+ * Handles the loading and initialization of the Voucher Payment Gateway plugin.
  */
-class UNIFIED_PAYMENT_GATEWAY_Loader
+class VOUCHER_PAYMENT_GATEWAY_Loader
 {
 	private static $instance = null;
 	private $admin_notices;
@@ -20,7 +20,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 	/**
 	 * Get the singleton instance of this class.
-	 * @return UNIFIED_PAYMENT_GATEWAY_Loader
+	 * @return VOUCHER_PAYMENT_GATEWAY_Loader
 	 */
 	public static function get_instance()
 	{
@@ -37,26 +37,26 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	private function __construct()
 	{
 
-		$this->base_url = UNIFIED_BASE_URL;
+		$this->base_url = VOUCHER_BASE_URL;
 		
-		$this->admin_notices = new UNIFIED_PAYMENT_GATEWAY_Admin_Notices();
+		$this->admin_notices = new VOUCHER_PAYMENT_GATEWAY_Admin_Notices();
 
-		add_action('admin_init', [$this, 'unified_handle_environment_check']);
+		add_action('admin_init', [$this, 'voucher_handle_environment_check']);
 		add_action('admin_notices', [$this->admin_notices, 'display_notices']);
-		add_action('plugins_loaded', [$this, 'unified_init'], 10);
+		add_action('plugins_loaded', [$this, 'voucher_init'], 10);
 
 		// Register the AJAX action callback for checking payment status
-		add_action('wp_ajax_unified_check_payment_status', array($this, 'unified_handle_check_payment_status_request'));
-		add_action('wp_ajax_nopriv_unified_check_payment_status', array($this, 'unified_handle_check_payment_status_request'));
+		add_action('wp_ajax_voucher_check_payment_status', array($this, 'voucher_handle_check_payment_status_request'));
+		add_action('wp_ajax_nopriv_voucher_check_payment_status', array($this, 'voucher_handle_check_payment_status_request'));
 
-		add_action('wp_ajax_unified_popup_closed_event', array($this, 'handle_popup_close'));
-		add_action('wp_ajax_nopriv_unified_popup_closed_event', array($this, 'handle_popup_close'));
+		add_action('wp_ajax_voucher_popup_closed_event', array($this, 'handle_popup_close'));
+		add_action('wp_ajax_nopriv_voucher_popup_closed_event', array($this, 'handle_popup_close'));
 
-		add_action('wp_ajax_unified_manual_sync', [$this, 'unified_manual_sync_callback']);
-		add_filter('cron_schedules', [$this, 'unified_add_cron_interval']);
-		add_action('unified_cron_event', [$this, 'handle_cron_event']);
-		add_action('wp_ajax_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
-		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']); 
+		add_action('wp_ajax_voucher_manual_sync', [$this, 'voucher_manual_sync_callback']);
+		add_filter('cron_schedules', [$this, 'voucher_add_cron_interval']);
+		add_action('voucher_cron_event', [$this, 'handle_cron_event']);
+		add_action('wp_ajax_voucher_block_gateway_process', [$this,'handle_voucher_gateway_ajax']);
+		add_action('wp_ajax_nopriv_voucher_block_gateway_process', [$this,'handle_voucher_gateway_ajax']); 
 		add_action('wp', function () {
 		    // Allow notices ONLY on checkout page
 		    if ( ! is_checkout() ) {
@@ -82,7 +82,27 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			}
 		});
 
-		add_action('woocommerce_before_checkout_form', [$this, 'unified_show_checkout_error']);
+		add_action('template_redirect', [$this, 'voucher_handle_voucher_link']);
+
+		add_action('woocommerce_before_checkout_form', [$this, 'voucher_show_checkout_error']);
+
+		// Prevent order reuse on standard checkout for this gateway if identity changes
+		add_action('woocommerce_before_checkout_process', function() {
+			if ( isset( $_POST['payment_method'] ) && 'voucher' === $_POST['payment_method'] ) {
+				if ( function_exists('WC') && WC()->session ) {
+					$awaiting_order_id = WC()->session->get('order_awaiting_payment');
+					if ( $awaiting_order_id ) {
+						$awaiting_order = wc_get_order( $awaiting_order_id );
+						$posted_email   = isset($_POST['billing_email']) ? sanitize_email($_POST['billing_email']) : '';
+						$posted_phone   = isset($_POST['billing_phone']) ? sanitize_text_field($_POST['billing_phone']) : '';
+						
+						if ( $awaiting_order && ( $awaiting_order->get_billing_email() !== $posted_email || $awaiting_order->get_billing_phone() !== $posted_phone ) ) {
+							WC()->session->set( 'order_awaiting_payment', null );
+						}
+					}
+				}
+			}
+		});
 	}
 
 	/**
@@ -90,7 +110,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	 * Handle the block checkout AJAX payment request.
 	 *
 	 * Root cause of "No available payment accounts":
-	 * `new UNIFIED_PAYMENT_GATEWAY()` creates a cold instance. In an AJAX
+	 * `new VOUCHER_PAYMENT_GATEWAY()` creates a cold instance. In an AJAX
 	 * context WooCommerce has not called init_settings() on it, so
 	 * $this->sandbox defaults to false and get_option() returns empty values.
 	 * get_next_available_account() then finds no matching keys → returns false.
@@ -100,43 +120,49 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	 * sandbox mode and account keys are correct.
 	 * ───────────────────────────────────────────────────────────────────────────
 	 */
-	function handle_unified_gateway_ajax(){
+	function handle_voucher_gateway_ajax(){
 
 		// Nonce verification
 		$nonce = isset($_POST['nonce'])
 			? sanitize_text_field(wp_unslash($_POST['nonce']))
 			: '';
 
-		if (empty($nonce) || !wp_verify_nonce($nonce, 'unified_payment')) {
+		if (empty($nonce) || !wp_verify_nonce($nonce, 'voucher_payment')) {
 			wp_send_json(['result' => 'fail', 'error' => 'Security check failed.']);
 			die;
 		}
 
 		// Pull the already-initialised gateway from the WC registry.
-		// Never use `new UNIFIED_PAYMENT_GATEWAY()` here — see note above.
+		// Never use `new VOUCHER_PAYMENT_GATEWAY()` here — see note above.
 		$gateways       = WC()->payment_gateways()->payment_gateways();
-		$unifiedPayment = $gateways['unified'] ?? null;
+		$voucherPayment = $gateways['voucher'] ?? null;
 
-		if (!$unifiedPayment) {
+		if (!$voucherPayment) {
 			// Fallback: manually instantiate and force-load settings from DB.
 			// Should never happen in normal operation.
-			$unifiedPayment = new UNIFIED_PAYMENT_GATEWAY();
-			$unifiedPayment->init_settings();
-			$unifiedPayment->load_gateway_settings();
+			$voucherPayment = new VOUCHER_PAYMENT_GATEWAY();
+			$voucherPayment->init_settings();
+			$voucherPayment->load_gateway_settings();
 
-			Unified_Payment_Gateway_Logger::warning(
-				'Unified: gateway not found in WC registry during AJAX — fell back to manual instantiation.',
-				['source' => 'unified-payment-gateway']
+			Voucher_Payment_Gateway_Logger::warning(
+				'Voucher: gateway not found in WC registry during AJAX — fell back to manual instantiation.',
+				['source' => 'voucher-payment-gateway']
 			);
 		}
 
-		$orderID = WC()->session ? WC()->session->get('store_api_draft_order') : null;
+		$orderID = WC()->session
+			? ( WC()->session->get('store_api_draft_order') ?: WC()->session->get('order_awaiting_payment') )
+			: null;
+
+		if ( ! empty( WC()->cart ) && ! WC()->cart->is_empty() ) {
+			$orderID = $this->voucher_create_block_order() ?: $orderID;
+		}
 
 		$status = [];
 		if($orderID){
-			$status = $unifiedPayment->process_payment($orderID);
+			$status = $voucherPayment->process_payment($orderID);
 		}else{
-			wc_add_notice(__('Invalid order.', 'unified-payment-gateway'), 'error');
+			wc_add_notice(__('Invalid order.', 'voucher-payment-gateway'), 'error');
 			$status = ['result' => 'fail','error' => 'Invalid order.'];
 		}
 		
@@ -145,41 +171,139 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	}
 
 	/**
+	 * Create the WooCommerce order for a block checkout payment.
+	 *
+	 * Delegates to WC_Checkout::create_order() so line items, shipping lines,
+	 * coupons, taxes and totals are built by WooCommerce itself rather than by
+	 * hand here.
+	 *
+	 * @return int Order ID, or 0 on failure.
+	 */
+	private function voucher_create_block_order() {
+
+		$checkout = WC()->checkout();
+		$data     = $checkout->get_posted_data();
+		$customer = WC()->customer;
+
+		if ( $customer ) {
+
+			$fields = [
+				'first_name',
+				'last_name',
+				'company',
+				'address_1',
+				'address_2',
+				'city',
+				'state',
+				'postcode',
+				'country',
+				'phone',
+				'email',
+			];
+
+			foreach ( $fields as $field ) {
+
+				$key = 'billing_' . $field;
+
+				if ( ! empty( $data[ $key ] ) ) {
+					continue;
+				}
+
+				$getter = 'get_' . $key;
+
+				if ( is_callable( [ $customer, $getter ] ) ) {
+					$data[ $key ] = $customer->$getter();
+				}
+			}
+		}
+
+		if ( empty( $data['payment_method'] ) ) {
+			$data['payment_method'] = 'voucher';
+		}
+
+		// Prevent reusing an order if the email address OR phone number doesn't match
+		if ( WC()->session ) {
+			$awaiting_order_id = WC()->session->get('order_awaiting_payment') ?: WC()->session->get('store_api_draft_order');
+			if ( $awaiting_order_id ) {
+				$awaiting_order = wc_get_order( $awaiting_order_id );
+				$posted_email   = sanitize_email( $data['billing_email'] ?? '' );
+				$posted_phone   = sanitize_text_field( $data['billing_phone'] ?? '' );
+				
+				if ( $awaiting_order && ( $awaiting_order->get_billing_email() !== $posted_email || $awaiting_order->get_billing_phone() !== $posted_phone ) ) {
+					WC()->session->set( 'order_awaiting_payment', null );
+					WC()->session->set( 'store_api_draft_order', null );
+				}
+			}
+		}
+
+		$order_id = $checkout->create_order( $data );
+
+		if ( is_wp_error( $order_id ) ) {
+
+			Voucher_Payment_Gateway_Logger::error(
+				'Could not create order for block checkout',
+				[
+					'error' => $order_id->get_error_message(),
+				]
+			);
+
+			return 0;
+		}
+
+		if ( WC()->session ) {
+			WC()->session->set( 'order_awaiting_payment', $order_id );
+		}
+
+		$created = wc_get_order( $order_id );
+
+		Voucher_Payment_Gateway_Logger::info(
+			'Created order for block checkout',
+			[
+				'order_id' => $order_id,
+				'total'    => $created ? $created->get_total() : null,
+				'email'    => $created ? $created->get_billing_email() : null,
+			]
+		);
+
+		return $order_id;
+	}
+
+	/**
 	 * Initializes the plugin.
 	 * This method is hooked into 'plugins_loaded' action.
 	 */
-	public function unified_init()
+	public function voucher_init()
 	{
 		// Check if the environment is compatible
-		$environment_warning = unified_check_system_requirements();
+		$environment_warning = voucher_check_system_requirements();
 		if ($environment_warning) {
 			return;
 		}
 
 		// Initialize gateways
-		$this->unified_init_gateways();
+		$this->voucher_init_gateways();
 
 		// Register blocks gateway
-		$this->unified_init_blocks();
+		$this->voucher_init_blocks();
 		
 		add_action( 'enqueue_block_assets', [ $this, 'register_blocks_assets' ] );
 
 		// Initialize REST API
-		$rest_api = UNIFIED_PAYMENT_GATEWAY_REST_API::get_instance();
-		$rest_api->unified_register_routes();
+		$rest_api = VOUCHER_PAYMENT_GATEWAY_REST_API::get_instance();
+		$rest_api->voucher_register_routes();
 
 		// Add plugin action links
-		add_filter('plugin_action_links_' . plugin_basename(UNIFIED_PAYMENT_GATEWAY_FILE), [$this, 'unified_plugin_action_links']);
+		add_filter('plugin_action_links_' . plugin_basename(VOUCHER_PAYMENT_GATEWAY_FILE), [$this, 'voucher_plugin_action_links']);
 
 		// Add plugin row meta
-		add_filter('plugin_row_meta', [$this, 'unified_plugin_row_meta'], 10, 2);
+		add_filter('plugin_row_meta', [$this, 'voucher_plugin_row_meta'], 10, 2);
 	}
 
-	public function unified_show_checkout_error()
+	public function voucher_show_checkout_error()
 	{
 		if (!function_exists('WC')) return;
 
-		$error = WC()->session->get('unified_error');
+		$error = WC()->session->get('voucher_error') ?: WC()->session->get('voucher_error');
 		if (!$error) return;
 
 		$messages = [
@@ -189,7 +313,8 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		];
 
 		// Clear error immediately
-		WC()->session->__unset('unified_error');
+		WC()->session->__unset('voucher_error');
+		WC()->session->__unset('voucher_error');
 
 		if (isset($messages[$error])) {
 			wc_add_notice($messages[$error], 'error');
@@ -199,28 +324,28 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	/**
 	 * Initialize gateways.
 	 */
-	private function unified_init_gateways()
+	private function voucher_init_gateways()
 	{
 		if (!class_exists('WC_Payment_Gateway')) {
 			return;
 		}
 
-		include_once UNIFIED_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/class-unified-payment-gateway.php';
+		include_once VOUCHER_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/class-voucher-payment-gateway.php';
 
 		add_filter('woocommerce_payment_gateways', function ($methods) {
-			$methods[] = 'UNIFIED_PAYMENT_GATEWAY';			
+			$methods[] = 'VOUCHER_PAYMENT_GATEWAY';			
 			return $methods;
 		});
 	}
 
-	private function unified_init_blocks() {
+	private function voucher_init_blocks() {
 		
 			if ( class_exists( '\Automattic\WooCommerce\Blocks\Payments\Integrations\AbstractPaymentMethodType' ) ) {
 
-				require_once UNIFIED_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/class-unified-blocks-gateway.php';
+				require_once VOUCHER_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/class-voucher-blocks-gateway.php';
 
 				add_action( 'woocommerce_blocks_payment_method_type_registration', function( $registry ) {
-					$registry->register( new UNIFIED_Blocks_Gateway() );
+					$registry->register( new VOUCHER_Blocks_Gateway() );
 				});
 			}
 	
@@ -231,24 +356,27 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		if (is_checkout()) {
 			$image_url = plugin_dir_url( dirname( __FILE__ ) ) . 'assets/images/loader.gif';
 			wp_register_script(
-				'unified-blocks-js',
-				plugin_dir_url( UNIFIED_PAYMENT_GATEWAY_FILE ) . 'assets/js/unified-blocks.js',
+				'voucher-blocks-js',
+				plugin_dir_url( VOUCHER_PAYMENT_GATEWAY_FILE ) . 'assets/js/voucher-blocks.js',
 				[ 'wc-blocks-registry', 'wc-settings', 'wp-element' ],
 				'1.0.0',
 				true
 			);
 
-			$settings = get_option( 'woocommerce_unified_settings', [] );
+			$settings = get_option( 'woocommerce_voucher_settings', [] );
+			if (empty($settings)) {
+				$settings = get_option( 'woocommerce_voucher_settings', [] );
+			}
 
 			wp_localize_script(
-				'unified-blocks-js',
-				'unified_params',
+				'voucher-blocks-js',
+				'voucher_params',
 				[ 'settings' => $settings,
 				 'ajax_url' => admin_url('admin-ajax.php'),
-				 'unified_loader' => $image_url,
-				 'unified_nonce' => wp_create_nonce('unified_payment'), 
+				 'voucher_loader' => $image_url,
+				 'voucher_nonce' => wp_create_nonce('voucher_payment'), 
 				 'checkout_url' => wc_get_checkout_url(),
-				 'payment_method' => 'unified' 
+				 'payment_method' => 'voucher' 
 				]
 			);
 	
@@ -266,10 +394,10 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	 * @param array $links
 	 * @return array
 	 */
-	public function unified_plugin_action_links($links)
+	public function voucher_plugin_action_links($links)
 	{
 		$plugin_links = [
-			'<a href="' . esc_url(admin_url('admin.php?page=wc-settings&tab=checkout&section=unified')) . '">' . esc_html__('Settings', 'unified-payment-gateway') . '</a>',
+			'<a href="' . esc_url(admin_url('admin.php?page=wc-settings&tab=checkout&section=voucher')) . '">' . esc_html__('Settings', 'voucher-payment-gateway') . '</a>',
 		];
 
 		return array_merge($plugin_links, $links);
@@ -281,12 +409,12 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	 * @param string $file
 	 * @return array
 	 */
-	public function unified_plugin_row_meta($links, $file)
+	public function voucher_plugin_row_meta($links, $file)
 	{
-		if (plugin_basename(UNIFIED_PAYMENT_GATEWAY_FILE) === $file) {
+		if (plugin_basename(VOUCHER_PAYMENT_GATEWAY_FILE) === $file) {
 			$row_meta = [
-				'docs'    => '<a href="' . esc_url(apply_filters('unified_docs_url', 'https://qa-rt.unified.xyz/docs/wordpress-plugin')) . '" target="_blank">' . esc_html__('Documentation', 'unified-payment-gateway') . '</a>',
-				'support' => '<a href="' . esc_url(apply_filters('unified_support_url', 'https://qa-rt.unified.xyz/contact-us')) . '" target="_blank">' . esc_html__('Support', 'unified-payment-gateway') . '</a>',
+				'docs'    => '<a href="' . esc_url(apply_filters('voucher_docs_url', 'https://pay.voucher.xyz/docs/wordpress-plugin')) . '" target="_blank">' . esc_html__('Documentation', 'voucher-payment-gateway') . '</a>',
+				'support' => '<a href="' . esc_url(apply_filters('voucher_support_url', 'https://pay.voucher.xyz/contact-us')) . '" target="_blank">' . esc_html__('Support', 'voucher-payment-gateway') . '</a>',
 			];
 
 			$links = array_merge($links, $row_meta);
@@ -298,12 +426,12 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	/**
 	 * Check the environment and display notices if necessary.
 	 */
-	public function unified_handle_environment_check()
+	public function voucher_handle_environment_check()
 	{
-		$environment_warning = unified_check_system_requirements();
+		$environment_warning = voucher_check_system_requirements();
 		if ($environment_warning) {
 			// Sanitize the environment warning before displaying it
-			$this->admin_notices->unified_add_notice('error', 'error', sanitize_text_field($environment_warning));
+			$this->admin_notices->voucher_add_notice('error', 'error', sanitize_text_field($environment_warning));
 		}
 	}
 
@@ -311,18 +439,18 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	 * Handle the AJAX request for checking payment status.
 	 * @param $request
 	 */
-	public function unified_handle_check_payment_status_request($request)
+	public function voucher_handle_check_payment_status_request($request)
 	{
-		check_ajax_referer('unified_payment', 'security');
+		check_ajax_referer('voucher_payment', 'security');
 
 		// Sanitize and validate the order ID from $_POST
 		$order_id = isset($_POST['order_id']) ? intval(sanitize_text_field(wp_unslash($_POST['order_id']))) : null;
 		if (!$order_id) {
-			wp_send_json_error(array('error' => esc_html__('Invalid order ID', 'unified-payment-gateway')));
+			wp_send_json_error(array('error' => esc_html__('Invalid order ID', 'voucher-payment-gateway')));
 		}
 
 		// Call the function to check payment status with the validated order ID
-		return $this->unified_check_payment_status($order_id);
+		return $this->voucher_check_payment_status($order_id);
 	}
 
 	/**
@@ -330,13 +458,13 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	 * @param int $order_id
 	 * @return WP_REST_Response
 	 */
-	public function unified_check_payment_status($order_id)
+	public function voucher_check_payment_status($order_id)
 	{
 		$order = wc_get_order($order_id);
 
 		if (!$order) {
 			return new WP_REST_Response([
-				'error' => esc_html__('Order not found', 'unified-payment-gateway')
+				'error' => esc_html__('Order not found', 'voucher-payment-gateway')
 			], 404);
 		}
 
@@ -349,9 +477,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		// NONCE CHECK
 		// -------------------------
-		if (empty($security) || !wp_verify_nonce($security, 'unified_payment')) {
+		if (empty($security) || !wp_verify_nonce($security, 'voucher_payment')) {
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . ' CheckStatus | Invalid nonce'
 			);
 
@@ -365,7 +493,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		// API CALL
 		// -------------------------
-		$payment_token = $order->get_meta('_unified_pay_id');
+		$payment_token = $order->get_meta('_voucher_pay_id') ?: $order->get_meta('_voucher_pay_id');
 
 		$response = wp_remote_post(
 			$this->get_api_url('/api/update-txn-status'),
@@ -385,7 +513,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		if (is_wp_error($response)) {
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . ' CheckStatus | API error'
 			);
 
@@ -403,7 +531,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		if (!is_array($response_data)) {
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . ' CheckStatus | Invalid API response'
 			);
 
@@ -424,11 +552,11 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		if ($payment_status) {
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . " CheckStatus | Engine trigger ({$payment_status})"
 			);
 
-			$result = UNIFIED_PAYMENT_ENGINE::handle_event(
+			$result = Voucher_Payment_State_Engine::handle_event(
 				$order_id,
 				'redirect_check',
 				[
@@ -437,7 +565,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				]
 			);
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . " CheckStatus | Engine result: " . json_encode($result)
 			);
 		}
@@ -449,7 +577,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		$wc_status = $order->get_status();
 
-		$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state(
+		$state = Voucher_Payment_State_Engine::resolve_final_state(
 			$order,
 			$payment_status
 		);
@@ -488,16 +616,115 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		wp_die();
 	}
 
-	private function unified_log($message, $context = [])
+	private function voucher_log($message, $context = [])
 	{
 		if (function_exists('wc_get_logger')) {
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$message,
 				array_merge([
-					'source' => 'unified-payment-gateway'
+					'source' => 'voucher-payment-gateway'
 				], $context)
 			);
 		}
+	}
+
+	/**
+	 * Turn a voucher link this plugin emailed into a payment page.
+	 */
+	public function voucher_handle_voucher_link()
+	{
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- link is signed with its own token.
+		if (empty($_GET['voucher_link']) && empty($_GET['voucher_voucher'])) {
+			return;
+		}
+
+		$order_id_param = !empty($_GET['voucher_link']) ? $_GET['voucher_link'] : $_GET['voucher_voucher'];
+		$order_id = absint(wp_unslash($order_id_param));
+		$key      = isset($_GET['key']) ? sanitize_text_field(wp_unslash($_GET['key'])) : '';
+		$token    = isset($_GET['token']) ? sanitize_text_field(wp_unslash($_GET['token'])) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		$order = $order_id ? wc_get_order($order_id) : false;
+
+		if (
+			!$order
+			|| !hash_equals($order->get_order_key(), $key)
+			|| !hash_equals(VOUCHER_PAYMENT_GATEWAY::voucher_token($order), $token)
+		) {
+			Voucher_Payment_Gateway_Logger::warning(
+				'Voucher link rejected',
+				['order_id' => $order_id]
+			);
+
+			$this->voucher_error(
+				__('This voucher link is not valid. Please contact us if you need a new one.', 'voucher-payment-gateway')
+			);
+		}
+
+		// Already paid: nothing left to buy.
+		if ($order->has_status(['processing', 'completed'])) {
+			wp_safe_redirect($order->get_checkout_order_received_url());
+			exit;
+		}
+
+		if ($order->has_status(['cancelled', 'refunded'])) {
+			$this->voucher_error(
+				__('This order is no longer available for payment. Please place a new order.', 'voucher-payment-gateway')
+			);
+		}
+
+		$gateways = WC()->payment_gateways()->payment_gateways();
+		$gateway  = $gateways['voucher'] ?? null;
+
+		if (!$gateway) {
+			$gateway = new VOUCHER_PAYMENT_GATEWAY();
+			$gateway->init_settings();
+			$gateway->load_gateway_settings();
+		}
+
+		$result = $gateway->voucher_create_payment_link($order);
+
+		$payment_link = $result['data']['payment_link'] ?? '';
+
+		if (($result['result'] ?? '') !== 'success' || empty($payment_link)) {
+
+			Voucher_Payment_Gateway_Logger::error(
+				'Voucher link could not create a payment link',
+				[
+					'order_id' => $order_id,
+					'message'  => $result['message'] ?? null,
+				]
+			);
+
+			$this->voucher_error(
+				$result['message'] ?: __('We could not open your payment page. Please try again in a moment.', 'voucher-payment-gateway')
+			);
+		}
+
+		Voucher_Payment_Gateway_Logger::info(
+			"[Order #{$order_id}] Voucher link opened; redirecting to payment page"
+		);
+
+		// External payment host, so wp_safe_redirect() cannot be used here.
+		wp_redirect($payment_link); // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect
+		exit;
+	}
+
+	/**
+	 * Stop on the voucher link with a readable message.
+	 *
+	 * @param string $message What went wrong.
+	 */
+	private function voucher_error($message)
+	{
+		wp_die(
+			esc_html($message),
+			esc_html__('Voucher unavailable', 'voucher-payment-gateway'),
+			[
+				'response'  => 200,
+				'back_link' => true,
+			]
+		);
 	}
 
 	public function handle_popup_close()
@@ -515,9 +742,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		// NONCE CHECK
 		// -------------------------
-		if (empty($security) || !wp_verify_nonce($security, 'unified_payment')) {
+		if (empty($security) || !wp_verify_nonce($security, 'voucher_payment')) {
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . ' PopupClose | Invalid nonce'
 			);
 
@@ -535,7 +762,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		if (!$order) {
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . ' PopupClose | Order not found'
 			);
 
@@ -549,11 +776,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		// API CALL
 		// -------------------------
-		$payment_token = $order->get_meta('_unified_active_pay_id');
-
-		if (empty($payment_token)) {
-			$payment_token = $order->get_meta('_unified_pay_id');
-		}
+		$payment_token = $order->get_meta('_voucher_pay_id') ?: $order->get_meta('_voucher_pay_id');
 
 		$response = wp_remote_post(
 			$this->get_api_url('/api/update-txn-status'),
@@ -573,7 +796,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		if (is_wp_error($response)) {
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . ' PopupClose | API error'
 			);
 
@@ -591,7 +814,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		if (!is_array($response_data)) {
 
-			Unified_Payment_Gateway_Logger::info(
+			Voucher_Payment_Gateway_Logger::info(
 				$log_prefix . ' PopupClose | Invalid API response'
 			);
 
@@ -629,7 +852,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		// ENGINE CALL
 		// -------------------------
-		$result = UNIFIED_PAYMENT_ENGINE::handle_event(
+		$result = Voucher_Payment_State_Engine::handle_event(
 			$order_id,
 			'popup_close',
 			[
@@ -638,37 +861,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			]
 		);
 
-		// ❌ REMOVE locked_skip handling completely
-
-		Unified_Payment_Gateway_Logger::info(
-			$log_prefix . ' PopupClose | Engine result: ' . wp_json_encode($result)
+		Voucher_Payment_Gateway_Logger::info(
+			$log_prefix . " PopupClose | Engine result: " . json_encode($result)
 		);
-
-		// Ignore lock races and wait for next poll
-		if (
-			is_array($result) &&
-			(($result['reason'] ?? '') === 'locked_skip')
-		)
-		{
-			$order = wc_get_order($order_id);
-
-			$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state($order);
-
-			wp_send_json([
-				'success' => ($state === 'success'),
-				'message' => '',
-				'data' => [
-					'state'          => $state ?: 'processing',
-					'payment_status' => $payment_status,
-					'redirect'       => $state === 'success'
-						? $order->get_checkout_order_received_url()
-						: null,
-					'order_id'       => $order_id,
-				],
-			]);
-
-			wp_die();
-		}
 
 		// -------------------------
 		// ALWAYS RELOAD ORDER AFTER ENGINE
@@ -676,12 +871,12 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		$order = wc_get_order($order_id);
 
 		// 🔥 PRIMARY STATE = ENGINE STORED STATE ONLY
-		$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state($order);
+		$state = Voucher_Payment_State_Engine::resolve_final_state($order);
 
 		// -------------------------
 		// HARD OVERRIDE SAFETY (ONLY ONE SOURCE)
 		// -------------------------
-		if ($order->get_meta('_unified_state') === 'success') {
+		if ($order->get_meta('_voucher_state') === 'success' || $order->get_meta('_voucher_state') === 'success') {
 			$state = 'success';
 		}
 
@@ -690,10 +885,6 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		$is_success = ($state === 'success');
 
-		if ($state !== 'success' && !empty($response_data['transaction_status']) && $response_data['transaction_status'] === 'processing') {
-
-			$state = 'processing';
-		}
 		// -------------------------
 		// MESSAGE
 		// -------------------------
@@ -720,7 +911,6 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		$redirect = null;
 
-		// 🔥 ONLY ENGINE STATE DECIDES REDIRECT
 		if ($state === 'success') {
 
 			$redirect = $order->get_checkout_order_received_url();
@@ -755,48 +945,51 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	/**
      * Add custom cron schedules.
      */
-	public function unified_add_cron_interval($schedules)
+	public function voucher_add_cron_interval($schedules)
 	{
 		$schedules['every_two_hours'] = array(
 			'interval' => 2 * 60 * 60, // 2 hours in seconds = 7200
-			'display'  => __('Every Two Hours', 'unified-payment-gateway')
+			'display'  => __('Every Two Hours', 'voucher-payment-gateway')
 		);
 		return $schedules;
 	}
 
 	function activate_cron_job()
 	{
-		Unified_Payment_Gateway_Logger::info('Automatic payment status checks have been enabled.', ['source' => 'unified-payment-gateway']);
+		Voucher_Payment_Gateway_Logger::info('Automatic payment status checks have been enabled.', ['source' => 'voucher-payment-gateway']);
 
 		// Clear existing scheduled event if it exists
-		$timestamp = wp_next_scheduled('unified_cron_event');
+		$timestamp = wp_next_scheduled('voucher_cron_event');
 		if ($timestamp) {
-			wp_unschedule_event($timestamp, 'unified_cron_event');
+			wp_unschedule_event($timestamp, 'voucher_cron_event');
 		}
 
 		// Schedule with new interval
-		wp_schedule_event(time(), 'every_two_hours', 'unified_cron_event');
+		wp_schedule_event(time(), 'every_two_hours', 'voucher_cron_event');
 	}
 
 	function deactivate_cron_job()
 	{
-		Unified_Payment_Gateway_Logger::info('Automatic payment status checks have been disabled.', ['source' => 'unified-payment-gateway']);
-		wp_clear_scheduled_hook('unified_cron_event');
+		Voucher_Payment_Gateway_Logger::info('Automatic payment status checks have been disabled.', ['source' => 'voucher-payment-gateway']);
+		wp_clear_scheduled_hook('voucher_cron_event');
 	}
 
 
 	public function handle_cron_event()
 	{
-		$logger_context = ['source' => 'unified-payment-gateway'];
+		$logger_context = ['source' => 'voucher-payment-gateway'];
 
-		$accounts = get_option('woocommerce_unified_payment_gateway_accounts');
+		$accounts = get_option('woocommerce_voucher_payment_gateway_accounts');
+		if (empty($accounts)) {
+			$accounts = get_option('woocommerce_voucher_payment_gateway_accounts');
+		}
 		if (is_string($accounts)) {
 			$unserialized = maybe_unserialize($accounts);
 			$accounts = is_array($unserialized) ? $unserialized : [];
 		}
 
 		if (!$accounts || !is_array($accounts)) {
-			Unified_Payment_Gateway_Logger::warning('No payment accounts found or the account format is invalid. Sync aborted.', $logger_context);
+			Voucher_Payment_Gateway_Logger::warning('No payment accounts found or the account format is invalid. Sync aborted.', $logger_context);
 			return [];
 		}
 
@@ -826,7 +1019,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		}
 
 		if (empty($accountsData)) {
-			Unified_Payment_Gateway_Logger::warning('No valid credentials found in any payment account. Sync skipped.', $logger_context);
+			Voucher_Payment_Gateway_Logger::warning('No valid credentials found in any payment account. Sync skipped.', $logger_context);
 			return [];
 		}
 
@@ -840,7 +1033,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		]);
 
 		if (is_wp_error($response)) {
-			Unified_Payment_Gateway_Logger::error('Unable to connect to the sync service. Please check the server connection or endpoint.', $logger_context);
+			Voucher_Payment_Gateway_Logger::error('Unable to connect to the sync service. Please check the server connection or endpoint.', array_merge($logger_context, [
+				'error' => $response->get_error_message(),
+			]));
 			return [];
 		}
 
@@ -889,48 +1084,48 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		if (!empty($statusSummary)) {
 			if ($updated) {
-				update_option('woocommerce_unified_payment_gateway_accounts', $accounts);
+				update_option('woocommerce_voucher_payment_gateway_accounts', $accounts);
 
-				Unified_Payment_Gateway_Logger::info('Payment account statuses were successfully updated after syncing.', [
-					'source'  => 'unified-payment-gateway',
+				Voucher_Payment_Gateway_Logger::info('Payment account statuses were successfully updated after syncing.', [
+					'source'  => 'voucher-payment-gateway',
 					'context' => ['updated_accounts' => $statusSummary],
 				]);
 			} else {
-				Unified_Payment_Gateway_Logger::info('Payment accounts were checked, but no updates were necessary.', [
-					'source'  => 'unified-payment-gateway',
+				Voucher_Payment_Gateway_Logger::info('Payment accounts were checked, but no updates were necessary.', [
+					'source'  => 'voucher-payment-gateway',
 					'context' => ['checked_accounts' => $statusSummary],
 				]);
 			}
 		} else {
-			Unified_Payment_Gateway_Logger::info('Sync completed. No account status data was returned from the server.', $logger_context);
+			Voucher_Payment_Gateway_Logger::info('Sync completed. No account status data was returned from the server.', $logger_context);
 		}
 
 		return $statusSummary;
 	}
 
 
-	function unified_manual_sync_callback()
+	function voucher_manual_sync_callback()
 	{
-		$logger_context = ['source' => 'unified-payment-gateway'];
+		$logger_context = ['source' => 'voucher-payment-gateway'];
 		// Verify nonce first
-		if (!check_ajax_referer('unified_sync_nonce', 'nonce', false)) {
-			Unified_Payment_Gateway_Logger::error('Security validation failed during manual sync.', $logger_context);
+		if (!check_ajax_referer('voucher_sync_nonce', 'nonce', false)) {
+			Voucher_Payment_Gateway_Logger::error('Security validation failed during manual sync.', $logger_context);
 			wp_send_json_error([
-				'message' => __('Security check failed. Please refresh the page and try again.', 'unified-payment-gateway')
+				'message' => __('Security check failed. Please refresh the page and try again.', 'voucher-payment-gateway')
 			], 400);
 			wp_die();
 		}
 
 		// Check user capabilities
 		if (!current_user_can('manage_woocommerce')) {
-		Unified_Payment_Gateway_Logger::error('Unauthorized manual sync attempt by user ID: ' . get_current_user_id(), $logger_context);
+			Voucher_Payment_Gateway_Logger::error('Unauthorized manual sync attempt by user ID: ' . get_current_user_id(), $logger_context);
 			wp_send_json_error([
-				'message' => __('You do not have permission to perform this action.', 'unified-payment-gateway')
+				'message' => __('You do not have permission to perform this action.', 'voucher-payment-gateway')
 			], 403);
 			wp_die();
 		}
 
-		Unified_Payment_Gateway_Logger::info("Payment accounts sync initiated", $logger_context);
+		Voucher_Payment_Gateway_Logger::info("Payment accounts sync initiated", $logger_context);
 
 		try {
 			ob_start();
@@ -939,20 +1134,20 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			$output = ob_get_clean();
 
 			if (!empty($output)) {
-				Unified_Payment_Gateway_Logger::warning('Unexpected output generated during sync: ' . $output, $logger_context);
+				Voucher_Payment_Gateway_Logger::warning('Unexpected output generated during sync: ' . $output, $logger_context);
 			}
 
-			Unified_Payment_Gateway_Logger::info('Payment accounts sync completed successfully.', $logger_context);
+			Voucher_Payment_Gateway_Logger::info('Payment accounts sync completed successfully.', $logger_context);
 
 			wp_send_json_success([
-				'message'  => __('Payment accounts synchronized successfully.', 'unified-payment-gateway'),
+				'message'  => __('Payment accounts synchronized successfully.', 'voucher-payment-gateway'),
 				'timestamp' => current_time('mysql'),
 				'statuses' => $statusSummary
 			]);
 		} catch (Exception $e) {
-			Unified_Payment_Gateway_Logger::error('Payment accounts sync failed: ' . $e->getMessage(), $logger_context);
+			Voucher_Payment_Gateway_Logger::error('Payment accounts sync failed: ' . $e->getMessage(), $logger_context);
 			wp_send_json_error([
-				'message' => __('Sync failed: ', 'unified-payment-gateway') . $e->getMessage(),
+				'message' => __('Sync failed: ', 'voucher-payment-gateway') . $e->getMessage(),
 				'code'    => $e->getCode()
 			], 500);
 		}
@@ -960,10 +1155,13 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		wp_die(); // Always include this
 	}
 
-	public function unified_send_plugin_status($plugin_status, $gateway_loaded)
+	public function voucher_send_plugin_status($plugin_status, $gateway_loaded)
 	{
-		$accounts = get_option('woocommerce_unified_payment_gateway_accounts', []);
-		
+		$accounts = get_option('woocommerce_voucher_payment_gateway_accounts', []);
+		if (empty($accounts)) {
+			$accounts = get_option('woocommerce_voucher_payment_gateway_accounts', []);
+		}
+
 		if (is_string($accounts)) {
 			$unserialized = maybe_unserialize($accounts);
 			$accounts = is_array($unserialized) ? $unserialized : [];
@@ -989,10 +1187,10 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		}
 
 		if (empty($public_key)) {
-			Unified_Payment_Gateway_Logger::error(
+			Voucher_Payment_Gateway_Logger::error(
 				'Unable to send plugin status. No public key found.',
 				[
-					'source' => 'unified-payment-gateway',
+					'source' => 'voucher-payment-gateway',
 				]
 			);
 			return;
@@ -1004,18 +1202,18 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			'valid_accounts'         => $accounts,
 			'plugin_status'          => (int) $plugin_status,
 			'gateway_loaded'         => (int) $gateway_loaded,
-			'plugin_version'         => UNIFIED_PLUGIN_VERSION,
+			'plugin_version'         => VOUCHER_PLUGIN_VERSION,
 			'wordpress_version'      => $wp_version,
 			'woocommerce_version'    => class_exists('WooCommerce') && function_exists('WC')
 				? WC()->version
 				: '',
 			'woocommerce_db_version' => get_option('woocommerce_db_version'),
-			'group_id'               => get_option('unified_group_id'),
+			'group_id'               => get_option('voucher_group_id'),
 			'domain_name'            => wp_parse_url(home_url(), PHP_URL_HOST),
 		];
 
 		$response = wp_remote_post(
-			trailingslashit(UNIFIED_BASE_URL) . 'api/plugin/check/plugin',
+			trailingslashit(VOUCHER_BASE_URL) . 'api/plugin/check/plugin',
 			[
 				'method'    => 'POST',
 				'timeout'   => 30,
@@ -1028,10 +1226,10 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		);
 
 		if (is_wp_error($response)) {
-			Unified_Payment_Gateway_Logger::error(
+			Voucher_Payment_Gateway_Logger::error(
 				'Plugin status API call failed.',
 				[
-					'source'  => 'unified-payment-gateway',
+					'source'  => 'voucher-payment-gateway',
 					'context' => [
 						'error' => $response->get_error_message(),
 					],
@@ -1040,10 +1238,10 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			return;
 		}
 
-		Unified_Payment_Gateway_Logger::info(
+		Voucher_Payment_Gateway_Logger::info(
 			'Plugin status updated successfully.',
 			[
-				'source'  => 'unified-payment-gateway',
+				'source'  => 'voucher-payment-gateway',
 				'context' => [
 					'plugin_status'  => $plugin_status,
 					'gateway_loaded' => $gateway_loaded,

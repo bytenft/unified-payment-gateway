@@ -1,49 +1,49 @@
 <?php
 
 /**
- * Plugin Name: Unified Payment Gateway
- * Description: Use a Credit Card, Debit Card or Google Pay, Apple Pay to complete your purchase via USDC. The transaction will appear on your bank or card statement as *Unified.
- * Author: Unified
- * Author URI: https://rt.app/
- * Text Domain: unified-payment-gateway
- * Plugin URI: https://github.com/bytenft/unified-payment-gateway
- * Version: 1.0.2
+ * Plugin Name: Voucher Payment Gateway
+ * Description: Use a Credit Card, Debit Card or Google Pay, Apple Pay to complete your purchase via USDC. The transaction will appear on your bank or card statement as *Voucher.
+ * Author: Voucher
+ * Author URI: https://pay.voucher.xyz/
+ * Text Domain: voucher-payment-gateway
+ * Plugin URI: https://github.com/voucher/voucher-payment-gateway
+ * Version: 1.0.3
  * License: GPLv3 or later
  * License URI: https://www.gnu.org/licenses/gpl-3.0.html
  *
- * Copyright (c) 2024 Unified
+ * Copyright (c) 2024 Voucher
  */
 
 if (!defined('ABSPATH')) {
 	exit;
 }
 
-define('UNIFIED_PAYMENT_GATEWAY_MIN_PHP_VER', '8.0');
-define('UNIFIED_PAYMENT_GATEWAY_MIN_WC_VER', '6.5.4');
-define('UNIFIED_PAYMENT_GATEWAY_FILE', __FILE__);
-define('UNIFIED_PAYMENT_GATEWAY_PLUGIN_DIR', plugin_dir_path(__FILE__));
+define('VOUCHER_PAYMENT_GATEWAY_MIN_PHP_VER', '8.0');
+define('VOUCHER_PAYMENT_GATEWAY_MIN_WC_VER', '6.5.4');
+define('VOUCHER_PAYMENT_GATEWAY_FILE', __FILE__);
+define('VOUCHER_PAYMENT_GATEWAY_PLUGIN_DIR', plugin_dir_path(__FILE__));
 
 // Include utility functions
-require_once UNIFIED_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/unified-payment-gateway-utils.php';
+require_once VOUCHER_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/voucher-payment-gateway-utils.php';
 
 // Migrations functions
 include_once plugin_dir_path(__FILE__) . 'migration.php';
 
 // Autoload classes
 spl_autoload_register(function ($class) {
-	if (strpos($class, 'UNIFIED_PAYMENT_GATEWAY') === 0) {
-		$class_file = UNIFIED_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/class-' . str_replace('_', '-', strtolower($class)) . '.php';
+	if (strpos($class, 'VOUCHER_PAYMENT_GATEWAY') === 0) {
+		$class_file = VOUCHER_PAYMENT_GATEWAY_PLUGIN_DIR . 'includes/class-' . str_replace('_', '-', strtolower($class)) . '.php';
 		if (file_exists($class_file)) {
 			require_once $class_file;
 		}
 	}
 });
 
-UNIFIED_PAYMENT_GATEWAY_Loader::get_instance();
+VOUCHER_PAYMENT_GATEWAY_Loader::get_instance();
 
-add_action('woocommerce_cancel_unpaid_order', 'unified_cancel_unpaid_order_action');
-add_action('woocommerce_order_status_cancelled', 'unified_cancel_unpaid_order_action');
-add_action('woocommerce_order_status_changed', 'unified_cancel_unpaid_order_action', 10, 4);
+add_action('woocommerce_cancel_unpaid_order', 'voucher_cancel_unpaid_order_action');
+add_action('woocommerce_order_status_cancelled', 'voucher_cancel_unpaid_order_action');
+add_action('woocommerce_order_status_changed', 'voucher_cancel_unpaid_order_action', 10, 4);
 
 add_filter('woocommerce_get_checkout_order_received_url', function($url, $order) {
 
@@ -51,16 +51,16 @@ add_filter('woocommerce_get_checkout_order_received_url', function($url, $order)
         return $url;
     }
 
-    // Only police Unified orders
-    if ($order->get_payment_method() !== 'unified') {
+    // Only police Voucher orders
+    if ($order->get_payment_method() !== 'voucher') {
         return $url;
     }
 
 	$wc_status    = $order->get_status();
-	$engine_state = $order->get_meta('_unified_state');
-	$success_meta = $order->get_meta('_unified_payment_success');
+	$engine_state = $order->get_meta('_voucher_state');
+	$success_meta = $order->get_meta('_voucher_payment_success');
 	
-	Unified_Payment_Gateway_Logger::info(	
+	Voucher_Payment_Gateway_Logger::info(	
 		sprintf(
 			"[Order #%d] ThankYou Filter | WC=%s | Engine=%s | Success=%s",
 			$order->get_id(),
@@ -73,7 +73,7 @@ add_filter('woocommerce_get_checkout_order_received_url', function($url, $order)
     $is_valid = in_array($wc_status, ['processing', 'completed'], true) || $success_meta === 'yes' || $engine_state === 'success';
 
 	if (!$is_valid) {
-		Unified_Payment_Gateway_Logger::info(
+		Voucher_Payment_Gateway_Logger::info(
 			sprintf(
 				'[Order #%d] ThankYou Filter BLOCKED -> %s',
 				$order->get_id(),
@@ -83,7 +83,7 @@ add_filter('woocommerce_get_checkout_order_received_url', function($url, $order)
 		return wc_get_checkout_url();
 	}
 
-   	Unified_Payment_Gateway_Logger::info(
+   	Voucher_Payment_Gateway_Logger::info(
 		sprintf(
 			'[Order #%d] ThankYou Filter ALLOWED -> %s',
 			$order->get_id(),
@@ -101,7 +101,7 @@ add_filter('woocommerce_get_checkout_order_received_url', function($url, $order)
  *
  * @param int $order_id The ID of the order to cancel.
  */
-function unified_cancel_unpaid_order_action($order_id)
+function voucher_cancel_unpaid_order_action($order_id)
 {
 	global $wpdb;
 
@@ -128,21 +128,21 @@ function unified_cancel_unpaid_order_action($order_id)
 			$order_id = $placeholder_orders[0];
 			$order    = wc_get_order($order_id);
 
-			Unified_Payment_Gateway_Logger::info('Fallback to latest unpaid placeholder order.', [
-				'source'  => 'unified-payment-gateway',
+			Voucher_Payment_Gateway_Logger::info('Fallback to latest unpaid placeholder order.', [
+				'source'  => 'voucher-payment-gateway',
 				'context' => ['order_id' => $order_id],
 			]);
 		} else {
-			Unified_Payment_Gateway_Logger::error('No unpaid placeholder orders found.', [
-				'source' => 'unified-payment-gateway',
+			Voucher_Payment_Gateway_Logger::error('No unpaid placeholder orders found.', [
+				'source' => 'voucher-payment-gateway',
 			]);
 			return;
 		}
 	}
 
 	if (!$order) {
-		Unified_Payment_Gateway_Logger::error('Order not found.', [
-			'source'  => 'unified-payment-gateway',
+		Voucher_Payment_Gateway_Logger::error('Order not found.', [
+			'source'  => 'voucher-payment-gateway',
 			'context' => ['order_id' => $order_id],
 		]);
 		return;
@@ -154,8 +154,8 @@ function unified_cancel_unpaid_order_action($order_id)
 
 		if ($order->has_status('pending')) {
 			if ((time() - $pending_time) < (30 * 60)) {
-				Unified_Payment_Gateway_Logger::info('Order still within pending timeout. Skipping cancel.', [
-					'source'  => 'unified-payment-gateway',
+				Voucher_Payment_Gateway_Logger::info('Order still within pending timeout. Skipping cancel.', [
+					'source'  => 'voucher-payment-gateway',
 					'context' => ['order_id' => $order_id],
 				]);
 				return;
@@ -163,18 +163,18 @@ function unified_cancel_unpaid_order_action($order_id)
 
 			$order->update_status('cancelled', 'Order automatically cancelled due to unpaid timeout.');
 			wc_reduce_stock_levels($order_id);
-			wp_cache_delete('unified_payment_link_uuid_' . $order_id, 'unified_payment_gateway');
-			wp_cache_delete('unified_payment_row_' . $order_id, 'unified_payment_gateway'); // Clear row cache
+			wp_cache_delete('voucher_payment_link_uuid_' . $order_id, 'voucher_payment_gateway');
+			wp_cache_delete('voucher_payment_row_' . $order_id, 'voucher_payment_gateway'); // Clear row cache
 
-			Unified_Payment_Gateway_Logger::info('Order auto-cancelled due to unpaid timeout.', [
-				'source'  => 'unified-payment-gateway',
+			Voucher_Payment_Gateway_Logger::info('Order auto-cancelled due to unpaid timeout.', [
+				'source'  => 'voucher-payment-gateway',
 				'context' => ['order_id' => $order_id],
 			]);
 		}
 
 		$table_name  = $wpdb->prefix . 'order_payment_link';
-		$cache_key   = 'unified_payment_row_' . intval($order_id);
-		$cache_group = 'unified_payment_gateway';
+		$cache_key   = 'voucher_payment_row_' . intval($order_id);
+		$cache_group = 'voucher_payment_gateway';
 
 		$payment_row = wp_cache_get($cache_key, $cache_group);
 
@@ -201,15 +201,15 @@ function unified_cancel_unpaid_order_action($order_id)
 		$amount         = number_format(floatval($payment_row['amount'] ?? 0), 8, '.', '');
 
 		if (empty($uuid)) {
-			Unified_Payment_Gateway_Logger::error('Missing or invalid UUID in payment link table.', [
-				'source'  => 'unified-payment-gateway',
+			Voucher_Payment_Gateway_Logger::error('Missing or invalid UUID in payment link table.', [
+				'source'  => 'voucher-payment-gateway',
 				'context' => ['order_id' => $order_id, 'uuid' => $uuid],
 			]);
 			return;
 		}
 
 		$apiPath  = '/api/cancel-order-link';
-		$url      = UNIFIED_BASE_URL . $apiPath;
+		$url      = VOUCHER_BASE_URL . $apiPath;
 		$cleanUrl = esc_url(preg_replace('#(?<!:)//+#', '/', $url));
 
 		$request_payload = [
@@ -227,8 +227,8 @@ function unified_cancel_unpaid_order_action($order_id)
 		]);
 
 		if (is_wp_error($response)) {
-			Unified_Payment_Gateway_Logger::error("Cancel API call failed. Order ID: {$order_id}", [
-				'source'  => 'unified-payment-gateway',
+			Voucher_Payment_Gateway_Logger::error("Cancel API call failed. Order ID: {$order_id}", [
+				'source'  => 'voucher-payment-gateway',
 				'context' => [
 					'order_id' => $order_id,
 					'uuid'     => $uuid,
@@ -239,8 +239,8 @@ function unified_cancel_unpaid_order_action($order_id)
 			$response_body    = wp_remote_retrieve_body($response);
 			$decoded_response = json_decode($response_body, true);
 
-			Unified_Payment_Gateway_Logger::info("Cancel API response received for Order ID: {$order_id}.", [
-				'source'  => 'unified-payment-gateway',
+			Voucher_Payment_Gateway_Logger::info("Cancel API response received for Order ID: {$order_id}.", [
+				'source'  => 'voucher-payment-gateway',
 				'context' => [
 					'order_id'       => $order_id,
 					'uuid'           => $uuid,
@@ -254,4 +254,3 @@ function unified_cancel_unpaid_order_action($order_id)
 	}
 	
 }
-
