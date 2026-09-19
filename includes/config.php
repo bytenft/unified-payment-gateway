@@ -7,7 +7,7 @@ if (!defined('UNIFIED_PROTOCOL')) {
 }
 
 if (!defined('UNIFIED_HOST')) {
-    define('UNIFIED_HOST', 'bytenft.lcl');
+    define('UNIFIED_HOST', 'pay.bytenft.xyz');
 }
 
 if (!defined('UNIFIED_BASE_URL')) {
