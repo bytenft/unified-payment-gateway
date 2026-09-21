@@ -46,8 +46,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 		$this->id                 = self::ID;
 		$this->icon               = '';
-		$this->method_title       = __('Unified Payment Gateway', 'unified-payment-gateway');
-		$this->method_description = __('This plugin allows you to accept payments in USD through a secure payment gateway integration.', 'unified-payment-gateway');
+		$this->method_title       = __('Voucher Pay', 'unified-payment-gateway');
+		$this->method_description = __('Purchase and pay quickly with a voucher', 'unified-payment-gateway');
 
 		$this->unified_init_form_fields();
 		$this->init_settings();
@@ -727,7 +727,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 			'enabled' => [
 				'title'   => __('Enable/Disable', 'unified-payment-gateway'),
-				'label'   => __('Enable Unified Payment Gateway', 'unified-payment-gateway'),
+				'label'   => __('Enable Voucher Pay', 'unified-payment-gateway'),
 				'type'    => 'checkbox',
 				'default' => 'no',
 			],
@@ -736,7 +736,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'title'       => __('Title', 'unified-payment-gateway'),
 				'type'        => 'text',
 				'description' => __('This controls the title which the user sees during checkout.', 'unified-payment-gateway'),
-				'default'     => __('Buy with USDC Using Your Credit/Debit Card, Apple Pay or Google Pay — Secure, Modern Checkout 🔐', 'unified-payment-gateway'),
+				'default'     => __('Voucher Pay', 'unified-payment-gateway'),
 				'desc_tip'    => true,
 			],
 
@@ -744,11 +744,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'title'       => __('Description', 'unified-payment-gateway'),
 				'type'        => 'textarea',
 				'description' => __('Provide a brief description of the payment option.', 'unified-payment-gateway'),
-				'default'     => __(
-					'<p style="margin:0 0 6px; font-size:13px;">Use a Credit Card, Debit Card or Google Pay, Apple Pay to complete your purchase via USDC.</p>
-					<p style="margin:0 0 6px; font-size:13px;">The transaction will appear on your bank or card statement as *Unified</p>',
-					'unified-payment-gateway'
-				),
+				'default'     => __('Purchase and pay quickly with a voucher', 'unified-payment-gateway'),
 				'desc_tip'    => true,
 			],
 
@@ -1735,7 +1731,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 	}
 
 	public function unified_woocommerce_not_active_notice() {
-		echo '<div class="error"><p>' . esc_html__('Unified Payment Gateway requires WooCommerce to be installed and active.', 'unified-payment-gateway') . '</p></div>';
+		echo '<div class="error"><p>' . esc_html__('Voucher Pay requires WooCommerce to be installed and active.', 'unified-payment-gateway') . '</p></div>';
 	}
 
 	public function payment_fields() {

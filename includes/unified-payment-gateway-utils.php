@@ -10,7 +10,7 @@ function unified_check_system_requirements()
 	if (version_compare(phpversion(), UNIFIED_PAYMENT_GATEWAY_MIN_PHP_VER, '<')) {
 		return sprintf(
 			// translators: %1$s is the minimum required PHP version, %2$s is the current PHP version
-			__('The Unified Payment Gateway plugin requires PHP version %1$s or greater. You are running %2$s.', 'unified-payment-gateway'),
+			__('The Voucher Pay plugin requires PHP version %1$s or greater. You are running %2$s.', 'unified-payment-gateway'),
 			UNIFIED_PAYMENT_GATEWAY_MIN_PHP_VER,
 			phpversion()
 		);
@@ -24,7 +24,7 @@ function unified_check_system_requirements()
 	if (!$wc_db_version || version_compare($wc_db_version, UNIFIED_PAYMENT_GATEWAY_MIN_WC_VER, '<')) {
 		return sprintf(
 			// translators: %1$s is the minimum required WooCommerce database version, %2$s is the current WooCommerce database version (or "undefined" if not available)
-			__('The Unified Payment Gateway plugin requires WooCommerce database version %1$s or greater. You are running %2$s.', 'unified-payment-gateway'),
+			__('The Voucher Pay plugin requires WooCommerce database version %1$s or greater. You are running %2$s.', 'unified-payment-gateway'),
 			UNIFIED_PAYMENT_GATEWAY_MIN_WC_VER,
 			$wc_db_version ? $wc_db_version : __('undefined', 'unified-payment-gateway')
 		);
@@ -34,7 +34,7 @@ function unified_check_system_requirements()
 	if (!$wc_plugin_version || version_compare($wc_plugin_version, UNIFIED_PAYMENT_GATEWAY_MIN_WC_VER, '<')) {
 		return sprintf(
 			// translators: %1$s is the minimum required WooCommerce plugin version, %2$s is the current WooCommerce plugin version (or "undefined" if not available)
-			__('The Unified Payment Gateway plugin requires WooCommerce plugin version %1$s or greater. You are running %2$s.', 'unified-payment-gateway'),
+			__('The Voucher Pay plugin requires WooCommerce plugin version %1$s or greater. You are running %2$s.', 'unified-payment-gateway'),
 			UNIFIED_PAYMENT_GATEWAY_MIN_WC_VER,
 			$wc_plugin_version ? $wc_plugin_version : __('undefined', 'unified-payment-gateway')
 		);
@@ -68,7 +68,7 @@ if (!function_exists('unified_add_unique_order_note')) {
         }
 
         // Plugin identifier (IMPORTANT for tracking in WP admin)
-        $plugin_prefix = '<strong>Unified Gateway</strong>';
+        $plugin_prefix = '<strong>Voucher Pay</strong>';
 
         // Unique meta key per note type (scoped to plugin)
         $meta_key = '_unified_order_note_' . sanitize_key($key);

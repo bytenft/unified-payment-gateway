@@ -1,8 +1,8 @@
 <?php
 
 /**
- * Plugin Name: Unified Payment Gateway
- * Description: Use a Credit Card, Debit Card or Google Pay, Apple Pay to complete your purchase via USDC. The transaction will appear on your bank or card statement as *Unified.
+ * Plugin Name: Voucher Pay
+ * Description: Purchase and pay quickly with a voucher
  * Author: Unified
  * Author URI: https://rt.app/
  * Text Domain: unified-payment-gateway

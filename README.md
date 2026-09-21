@@ -1,6 +1,6 @@
-# Unified Payment Gateway
+# Voucher Pay
 
-The Unified Payment Gateway plugin for WooCommerce 8.9+ allows you to accept fiat payments to sell products on your WooCommerce store.
+The Voucher Pay plugin for WooCommerce 8.9+ allows you to accept fiat payments to sell products on your WooCommerce store.
 
 ## Plugin Information
 
@@ -33,7 +33,7 @@ For any issues or enhancement requests with this plugin, please contact the Unif
 
 ## 1. Download Plugin from GitHub
 
-- Visit the GitHub repository for the Unified Payment Gateway plugin at [GitHub Repository URL](https://github.com/voucher/unified-payment-gateway).
+- Visit the GitHub repository for the Voucher Pay plugin at [GitHub Repository URL](https://github.com/voucher/unified-payment-gateway).
 - Download the plugin ZIP file to your local machine.
 
 ## 2. Install the Plugin in WordPress
@@ -52,8 +52,8 @@ For any issues or enhancement requests with this plugin, please contact the Unif
   Log in to your WordPress Admin Dashboard.
 - **Navigate to Installed Plugins:**
   Go to `Plugins` > `Installed Plugins`.
-- **Activate Unified Payment Gateway:**
-  - Locate the Unified Payment Gateway plugin in the list.
+- **Activate Voucher Pay:**
+  - Locate the Voucher Pay plugin in the list.
   - Click `Activate` to enable the plugin.
 
 ## 4. Obtain API Keys from Unified Developer Settings Dashboard
@@ -65,7 +65,7 @@ For any issues or enhancement requests with this plugin, please contact the Unif
 - **Generate or Retrieve API Keys:**
   If API keys are not already generated, you can create new ones.
   Locate the API Keys or Credentials section.
-  Generate or retrieve the required API keys (e.g., Public Key, Secret Key) needed for integration with the Unified Payment Gateway plugin.
+  Generate or retrieve the required API keys (e.g., Public Key, Secret Key) needed for integration with the Voucher Pay plugin.
 
 ## 5. Update API Keys in WooCommerce Settings
 
@@ -74,14 +74,14 @@ For any issues or enhancement requests with this plugin, please contact the Unif
   Go to `WooCommerce` > `Settings`.
 - **Access the Payments Tab:**
   Click on the `Payments` tab at the top of the settings page.
-- **Select Unified Payment Gateway:**
-  Scroll down to find and select the Unified Payment Gateway among the available payment methods.
+- **Select Voucher Pay:**
+  Scroll down to find and select the Voucher Pay among the available payment methods.
 
 - **Add Plugin General Details:**
 
-  - **Title** : Unified Payment Gateway
+  - **Title** : Voucher Pay
     Description
-  - **Description** : Secure payments with Unified Payment Gateway.
+  - **Description** : Purchase and pay quickly with a voucher
   - **Enable/Disable Sandbox Mode** : Toggle sandbox mode per account.
   - **Payment Accounts (Add Multiple Accounts)** :
     - **Adding a New Account**
@@ -98,7 +98,7 @@ For any issues or enhancement requests with this plugin, please contact the Unif
 - **Save Changes:**
   Click `Save changes` at the bottom of the page to update and save your API key settings.
 
-## 6. Place Order via Unified Payment Option
+## 6. Place Order via Voucher Pay Option
 
 - **Visit Your Store Page and Add Products to Cart:**
   Navigate to your WordPress site's store page.
@@ -108,15 +108,15 @@ For any issues or enhancement requests with this plugin, please contact the Unif
   Go to your WordPress site's checkout page to review your order details.
 
 - **Check Available Payment Methods:**
-  Ensure that the Unified Payment Gateway option is visible among the available payment methods listed on the checkout page.
+  Ensure that the Voucher Pay option is visible among the available payment methods listed on the checkout page.
 
 - **Verify Integration:**
-  Confirm that customers can select the Unified Payment Gateway as a payment option when placing their orders.
+  Confirm that customers can select the Voucher Pay as a payment option when placing their orders.
 
 ## 7. Popup Window for Payment
 
 - **Secure Payment Processing:**
-  Upon selecting Unified, a secure popup window will open for payment processing.
+  Upon selecting Voucher Pay, a secure popup window will open for payment processing.
 
 ## 8. Complete the Payment Process
 
@@ -134,7 +134,7 @@ For any issues or enhancement requests with this plugin, please contact the Unif
 - **Verify Order Status:**
   Log in to your WordPress Admin Dashboard.
   Navigate to `WooCommerce` > `Orders` to view all orders.
-  Check for the latest orders placed using the Unified Payment Gateway to verify their status.
+  Check for the latest orders placed using the Voucher Pay to verify their status.
 
 ## Documentation
 
@@ -163,12 +163,12 @@ The official documentation for this plugin is available at: [https://qa-rt.unifi
 
 ### Version 1.0.0 (Initial Release)
 
-- **Initial Release:** Launched the Unified Payment Gateway plugin with core payment integration functionality for WooCommerce.
+- **Initial Release:** Launched the Voucher Pay plugin with core payment integration functionality for WooCommerce.
 
 ## Support
 
 For customer support, visit: [https://rt.app/contact-us](https://rt.app/contact-us)
 
-## Why Choose Unified Payment Gateway?
+## Why Choose Voucher Pay?
 
-With the Unified Payment Gateway, you can easily transfer fiat payments to sell products. Choose Unified Payment Gateway as your WooCommerce payment gateway to access your funds quickly through a powerful and secure payment engine provided by Unified.
+With Voucher Pay, you can easily transfer fiat payments to sell products. Choose Voucher Pay as your WooCommerce payment gateway to access your funds quickly through a powerful and secure payment engine provided by Unified.

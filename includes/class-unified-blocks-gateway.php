@@ -31,7 +31,7 @@ class UNIFIED_Blocks_Gateway extends AbstractPaymentMethodType {
 	}
 
 	public function get_payment_method_data() {
-         $title       = $this->settings['title'] ?? 'Unified';
+         $title       = $this->settings['title'] ?? 'Voucher Pay';
         $description = $this->settings['description'] ?? '';
 
 		if (WC()->cart) {

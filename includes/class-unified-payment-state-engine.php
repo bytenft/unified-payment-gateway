@@ -380,7 +380,7 @@ class Unified_Payment_State_Engine
         }
 
         return sprintf(
-            '<strong>Unified Gateway</strong><br><br>
+            '<strong>Voucher Pay</strong><br><br>
             <strong>%s</strong><br><br>
             <strong>Payment ID:</strong> %s<br>
             <strong>Updated Via:</strong> %s<br>

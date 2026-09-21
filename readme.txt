@@ -1,4 +1,4 @@
-=== Unified Payment Gateway ===
+=== Voucher Pay ===
 Contributors: Unified
 Tags: woocommerce, payment gateway, fiat, Unified
 Requires at least: 5.0
@@ -7,11 +7,11 @@ Stable tag: 1.0.3
 License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
-The Unified Payment Gateway plugin for WooCommerce 8.9+ allows you to accept fiat payments to sell products on your WooCommerce store.
+The Voucher Pay plugin for WooCommerce 8.9+ allows you to accept fiat payments to sell products on your WooCommerce store.
 
 == Description ==
 
-This plugin integrates Unified Payment Gateway with WooCommerce, enabling you to accept fiat payments. 
+This plugin integrates Voucher Pay with WooCommerce, enabling you to accept fiat payments. 
 
 == Installation ==
 

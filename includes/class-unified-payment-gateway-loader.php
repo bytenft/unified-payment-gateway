@@ -9,7 +9,7 @@ require_once plugin_dir_path(__FILE__) . 'class-unified-payment-state-engine.php
 require_once plugin_dir_path(__FILE__) . 'class-unified-payment-logger.php';
 /**
  * Class UNIFIED_PAYMENT_GATEWAY_Loader
- * Handles the loading and initialization of the Unified Payment Gateway plugin.
+ * Handles the loading and initialization of the Voucher Pay plugin.
  */
 class UNIFIED_PAYMENT_GATEWAY_Loader
 {
