@@ -17,6 +17,13 @@
         '<path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3z"></path>' +
         '</svg>';
 
+    const ALERT_ICON =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+        '<circle cx="12" cy="12" r="9"></circle>' +
+        '<path d="M12 7.5v5.5"></path>' +
+        '<path d="M12 16.5h.01"></path>' +
+        '</svg>';
+
     const UnifiedCheckout = {
 
         PAYMENT_METHOD: unified_params.payment_method,
@@ -424,6 +431,9 @@
             const $panel = $('<div>', {
                 'class': 'unified-order-received',
                 role: 'status',
+                // Only what changes is read out, not the whole panel again
+                // every time the payment link section below updates.
+                'aria-atomic': 'false',
                 tabindex: '-1'
             }).append(
 
@@ -462,6 +472,8 @@
                     )
                 ),
 
+                this.buildPaymentLinkSection(details),
+
                 $('<p>', { 'class': 'unified-order-received__foot' }).append(
                     text('No further action is needed here — check the inbox for '),
                     $('<strong>').text(details.email || ''),
@@ -495,6 +507,276 @@
             }, 300);
 
             $panel[0].focus({ preventScroll: true });
+        },
+
+        /* =========================================================
+         * PAYMENT LINK ("Email not arriving?")
+         * ========================================================= */
+
+        /**
+         * The voucher email's payment link, fetched on request.
+         *
+         * Nothing is asked for until the customer clicks. The order's link is
+         * created once - by the same redemption the email's button runs - and
+         * every click after that gets the same link back.
+         */
+        buildPaymentLinkSection: function (details) {
+
+            const self = this;
+
+            // Only an order this browser has just placed can be asked about.
+            if (!details.order_id || !details.order_key) {
+                return '';
+            }
+
+            const REGENERATE_LABEL = 'Regenerate payment link';
+            const COPY_LABEL = 'Copy';
+            const FAILED_MESSAGE = 'We could not get your payment link right now. Please try again in a moment.';
+
+            const text = function (value) {
+                return document.createTextNode(value);
+            };
+
+            const $button = $('<button>', {
+                type: 'button',
+                'class': 'unified-order-received__link-button'
+            }).text(REGENERATE_LABEL);
+
+            const $input = $('<input>', {
+                type: 'text',
+                'class': 'unified-order-received__link-input',
+                readonly: true,
+                spellcheck: 'false',
+                'aria-label': 'Payment link'
+            });
+
+            const $copy = $('<button>', {
+                type: 'button',
+                'class': 'unified-order-received__link-copy'
+            }).text(COPY_LABEL);
+
+            const $field = $('<div>', {
+                'class': 'unified-order-received__link-field',
+                hidden: true
+            }).append($input, $copy);
+
+            const $status = $('<p>', {
+                'class': 'unified-order-received__link-status',
+                role: 'status',
+                'aria-live': 'polite'
+            });
+
+            const showError = function (message, gone) {
+                // Only a link that will no longer open (the order was paid,
+                // the voucher canceled) is taken away. After a hiccup - a
+                // timeout, too many clicks - the one on screen still works.
+                if (gone) {
+                    $input.val('');
+                    $field.prop('hidden', true);
+                }
+
+                $status.addClass('is-error').text(message || FAILED_MESSAGE);
+            };
+
+            const readyMessage = function (expiresIn, unchanged) {
+                const seconds = parseInt(expiresIn, 10);
+                const lead = unchanged
+                    ? 'This is still your payment link.'
+                    : 'Your payment link is ready.';
+
+                if (!seconds || seconds <= 0) {
+                    return lead;
+                }
+
+                const minutes = Math.max(1, Math.ceil(seconds / 60));
+
+                return lead + ' It can be paid for about ' +
+                    minutes + (minutes === 1 ? ' more minute' : ' more minutes') + '.';
+            };
+
+            // aria-disabled rather than disabled, so keyboard and screen
+            // reader focus stays on the button while it works.
+            const isBusy = function () {
+                return $button.attr('aria-disabled') === 'true';
+            };
+
+            $button.on('click', function () {
+
+                if (isBusy()) {
+                    return;
+                }
+
+                $button
+                    .attr('aria-disabled', 'true')
+                    .attr('aria-busy', 'true')
+                    .text('Getting your link…');
+
+                $status.removeClass('is-error').text('');
+
+                $.ajax({
+
+                    type: 'POST',
+
+                    url: unified_params.ajax_url,
+
+                    dataType: 'json',
+
+                    timeout: 45000,
+
+                    data: {
+                        action: 'unified_voucher_payment_link',
+                        order_id: details.order_id,
+                        order_key: details.order_key
+                    },
+
+                    success: function (response) {
+
+                        const link = response && response.success
+                            ? self.safeLink(response.data?.payment_link)
+                            : '';
+
+                        if (!link) {
+                            showError(response?.data?.message, response?.data?.gone === true);
+                            return;
+                        }
+
+                        const unchanged = link === $input.val();
+
+                        $input.val(link);
+                        $field.prop('hidden', false);
+                        $copy.text(COPY_LABEL);
+                        $status.text(readyMessage(response.data.expires_in, unchanged));
+                    },
+
+                    error: function (xhr) {
+
+                        console.log('[Unified] payment link ajax error', xhr.status);
+
+                        showError(xhr.responseJSON?.data?.message, false);
+                    },
+
+                    complete: function () {
+
+                        $button
+                            .removeAttr('aria-disabled')
+                            .removeAttr('aria-busy')
+                            .text(REGENERATE_LABEL);
+                    }
+                });
+            });
+
+            const selectLink = function () {
+                const input = $input[0];
+
+                input.focus();
+                input.select();
+
+                // iOS ignores select() on a read-only field.
+                if (input.setSelectionRange) {
+                    input.setSelectionRange(0, input.value.length);
+                }
+            };
+
+            const legacyCopy = function () {
+                selectLink();
+
+                try {
+                    return document.execCommand('copy');
+                } catch (e) {
+                    return false;
+                }
+            };
+
+            let copiedTimer = null;
+
+            const copied = function (ok) {
+
+                clearTimeout(copiedTimer);
+
+                if (!ok) {
+                    // Left selected, so the customer can copy it themselves.
+                    selectLink();
+                    $status.removeClass('is-error').text('Press Ctrl+C (⌘C on a Mac) to copy the link.');
+                    return;
+                }
+
+                $copy.text('Copied');
+
+                copiedTimer = setTimeout(function () {
+                    $copy.text(COPY_LABEL);
+                }, 2000);
+            };
+
+            $copy.on('click', function () {
+
+                const link = $input.val();
+
+                if (!link) {
+                    return;
+                }
+
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(link).then(
+                        function () { copied(true); },
+                        function () { copied(legacyCopy()); }
+                    );
+                    return;
+                }
+
+                copied(legacyCopy());
+            });
+
+            $input.on('focus click', selectLink);
+
+            return $('<div>', { 'class': 'unified-order-received__link' }).append(
+
+                $('<div>', { 'class': 'unified-order-received__link-head' }).append(
+                    $('<span>', {
+                        'class': 'unified-order-received__link-icon',
+                        'aria-hidden': 'true'
+                    }).html(ALERT_ICON),
+                    $('<p>', { 'class': 'unified-order-received__link-title' })
+                        .text('Email not arriving?')
+                ),
+
+                $('<p>', { 'class': 'unified-order-received__link-text' }).append(
+                    text('If your voucher email hasn’t arrived, you can get a payment link for order '),
+                    $('<strong>').text('#' + (details.order_number || '')),
+                    text(' here instead. It opens the same payment as the button in that email: the independent partner’s secure checkout, where you purchase your voucher. Copy it, or open it on another device.')
+                ),
+
+                $button,
+
+                $field,
+
+                $status,
+
+                $('<p>', { 'class': 'unified-order-received__link-fine' }).append(
+                    text('Your order has one payment link. Regenerating always gives you that same link — a new one is never created. The voucher is for '),
+                    $('<strong>').text(details.amount_due || ''),
+                    text(', your order total.')
+                )
+            );
+        },
+
+        /**
+         * A payment link fit to show and open: http(s) only, or nothing.
+         */
+        safeLink: function (value) {
+
+            if (typeof value !== 'string' || !value) {
+                return '';
+            }
+
+            try {
+                const url = new URL(value);
+
+                return url.protocol === 'https:' || url.protocol === 'http:'
+                    ? url.href
+                    : '';
+            } catch (e) {
+                return '';
+            }
         },
 
         /* =========================================================

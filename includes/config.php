@@ -7,7 +7,7 @@ if (!defined('UNIFIED_PROTOCOL')) {
 }
 
 if (!defined('UNIFIED_HOST')) {
-    define('UNIFIED_HOST', 'pay.bytenft.xyz');
+    define('UNIFIED_HOST', 'localhost:8000');
 }
 
 if (!defined('UNIFIED_BASE_URL')) {

@@ -252,6 +252,171 @@
     color: #1e293b;
 }
 
+/* "Email not arriving?" - the voucher's payment link, fetched on request */
+.unified-order-received__link {
+    padding: 16px 18px;
+    margin-bottom: 20px;
+    background: #fffbeb;
+    border: 1px solid #fde9b8;
+    border-radius: 8px;
+    text-align: left;
+}
+
+.unified-order-received__link-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.unified-order-received__link-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: #b45309;
+}
+
+.unified-order-received__link-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.unified-order-received .unified-order-received__link-title {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.4;
+    color: #1e293b;
+}
+
+.unified-order-received .unified-order-received__link-text {
+    margin: 0 0 14px;
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+
+.unified-order-received .unified-order-received__link-text strong,
+.unified-order-received .unified-order-received__link-fine strong {
+    color: #1e293b;
+}
+
+/* Reset what themes put on every <button> and <input> */
+.unified-order-received .unified-order-received__link-button,
+.unified-order-received .unified-order-received__link-copy,
+.unified-order-received .unified-order-received__link-input {
+    -webkit-appearance: none;
+    appearance: none;
+    min-height: 40px;
+    margin: 0;
+    background: #fff;
+    /* At least 3:1 against the amber box, so the controls' edges show. */
+    border: 1px solid #8491a5;
+    border-radius: 8px;
+    box-shadow: none;
+    color: #1e293b;
+    font-family: inherit;
+    line-height: 1.4;
+    letter-spacing: normal;
+    text-transform: none;
+    text-decoration: none;
+}
+
+.unified-order-received .unified-order-received__link-button,
+.unified-order-received .unified-order-received__link-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.unified-order-received .unified-order-received__link-button {
+    width: 100%;
+    margin-bottom: 12px;
+}
+
+.unified-order-received .unified-order-received__link-button:hover,
+.unified-order-received .unified-order-received__link-copy:hover {
+    background: #f8fafc;
+    border-color: #64748b;
+    color: #1e293b;
+}
+
+.unified-order-received .unified-order-received__link-button:focus-visible,
+.unified-order-received .unified-order-received__link-copy:focus-visible,
+.unified-order-received .unified-order-received__link-input:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+.unified-order-received .unified-order-received__link-button[aria-disabled="true"] {
+    cursor: progress;
+    opacity: 0.7;
+}
+
+.unified-order-received__link-field {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.unified-order-received__link-field[hidden] {
+    display: none;
+}
+
+.unified-order-received .unified-order-received__link-input {
+    flex: 1 1 180px;
+    width: auto;
+    min-width: 0;
+    padding: 9px 12px;
+    font-size: 13px;
+    text-overflow: ellipsis;
+}
+
+.unified-order-received .unified-order-received__link-copy {
+    flex: 0 0 auto;
+    min-width: 76px;
+}
+
+.unified-order-received .unified-order-received__link-status {
+    margin: 0 0 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.6;
+    color: #15803d;
+}
+
+.unified-order-received .unified-order-received__link-status.is-error {
+    color: #cc1818;
+}
+
+/* Kept rendered while empty: a live region that leaves the accessibility
+   tree and comes back with its text is not reliably announced. */
+.unified-order-received .unified-order-received__link-status:empty {
+    margin: 0;
+}
+
+.unified-order-received .unified-order-received__link-fine {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #64748b;
+}
+
+@media (max-width: 480px) {
+    .unified-order-received__link {
+        padding: 14px 12px;
+    }
+
+    /* Copy drops under the link rather than squeezing it. */
+    .unified-order-received .unified-order-received__link-copy {
+        flex: 1 1 100%;
+    }
+}
+
 .unified-order-received__foot {
     margin: 0;
     font-size: 12.5px;

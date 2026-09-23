@@ -1156,6 +1156,11 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				[
 					'payment_status' => 'pending',
 					'order_received' => [
+						// What the "Regenerate payment link" button proves the order
+						// is this customer's with - the same key WooCommerce's own
+						// order-pay and order-received links carry.
+						'order_id'     => $order->get_id(),
+						'order_key'    => $order->get_order_key(),
 						'order_number' => $order->get_order_number(),
 						'email'        => $order->get_billing_email(),
 						'items'        => $this->unified_get_summary_rows($order),
@@ -1518,6 +1523,313 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		);
 
 		$order->save();
+	}
+
+	/**
+	 * The voucher's payment link, for a customer whose voucher email has not arrived.
+	 *
+	 * Asked for by the "Regenerate payment link" button on the checkout's
+	 * order-received panel. The link is not made here. If the voucher has none
+	 * yet, Unified creates it once, through the same redemption the button in
+	 * the email runs; if it already has one, that same link comes back and
+	 * nothing new is created.
+	 *
+	 * Nothing about the link is kept on the order. The email button can replace
+	 * it later, and a copy here would only go stale.
+	 *
+	 * @param int    $order_id  Order ID sent by the checkout panel.
+	 * @param string $order_key Order key sent by the checkout panel.
+	 * @return array ['success' => bool, 'message' => string, 'gone' => bool, 'data' => array]
+	 *               'gone' is true when no link should be left on screen: the
+	 *               order or voucher will not be paid through one any more.
+	 */
+	public function unified_get_voucher_payment_link($order_id, $order_key) {
+
+		$order_id   = absint($order_id);
+		$log_prefix = "[Order #{$order_id}]";
+		$ip_address = filter_var($_SERVER['REMOTE_ADDR'] ?? '', FILTER_VALIDATE_IP) ?: 'invalid';
+
+		$unavailable = __('We could not get your payment link right now. Please try again in a moment, or contact the store for help.', 'unified-payment-gateway');
+		$too_many    = __('Too many requests. Please wait a minute and try again.', 'unified-payment-gateway');
+
+		// Generous, and before the order is looked up: it only has to keep a
+		// single client from hammering order lookups, not ration real customers.
+		if ($this->unified_rate_limit_hit('unified_link_rate_ip_' . md5($ip_address), 30, 60)) {
+
+			Unified_Payment_Gateway_Logger::warning(
+				$log_prefix . ' Payment link rate limit exceeded (client)',
+				['ip_address' => $ip_address]
+			);
+
+			return $this->unified_link_refusal($too_many);
+		}
+
+		$order = $order_id ? wc_get_order($order_id) : false;
+
+		/*
+		 * The same answer for an order that does not exist, is a refund, is not
+		 * this gateway's, or was named with the wrong key, so none of them can
+		 * be told apart from outside. The key is the secret WooCommerce's own
+		 * order-pay and order-received links carry; a registered customer's
+		 * order also needs them signed in, as the order-pay page does.
+		 */
+		$is_theirs = $order instanceof WC_Order
+			&& $order->get_payment_method() === $this->id
+			&& is_string($order_key)
+			&& $order_key !== ''
+			&& $order->key_is_valid($order_key)
+			&& (!$order->get_customer_id() || $order->get_customer_id() === get_current_user_id());
+
+		if (!$is_theirs) {
+
+			Unified_Payment_Gateway_Logger::warning(
+				$log_prefix . ' Payment link refused: order not found or key mismatch',
+				['ip_address' => $ip_address]
+			);
+
+			return $this->unified_link_refusal(
+				__('We could not find this order. Please contact the store for help.', 'unified-payment-gateway'),
+				true
+			);
+		}
+
+		// Per order, once it is known to be theirs: a customer clicking again
+		// and again, not everyone who happens to share their address.
+		if ($this->unified_rate_limit_hit('unified_link_rate_order_' . $order_id, 6, 60)) {
+
+			Unified_Payment_Gateway_Logger::warning(
+				$log_prefix . ' Payment link rate limit exceeded (order)',
+				['ip_address' => $ip_address]
+			);
+
+			return $this->unified_link_refusal($too_many);
+		}
+
+		// Pending while the voucher waits; failed after a payment that did not go
+		// through, which is exactly when a fresh link is what the customer needs.
+		if (!$order->has_status(['pending', 'failed'])) {
+
+			return $this->unified_link_refusal(
+				$order->is_paid()
+					? __('This order has already been paid.', 'unified-payment-gateway')
+					: __('This order is no longer awaiting payment.', 'unified-payment-gateway'),
+				true
+			);
+		}
+
+		$voucher_id = sanitize_text_field((string) $order->get_meta('_unified_voucher_id'));
+
+		if ($voucher_id === '') {
+
+			Unified_Payment_Gateway_Logger::warning(
+				$log_prefix . ' Payment link refused: no voucher recorded on the order',
+				['order_id' => $order_id]
+			);
+
+			return $this->unified_link_refusal($unavailable);
+		}
+
+		$accounts = $this->get_all_available_accounts();
+
+		if (empty($accounts)) {
+
+			Unified_Payment_Gateway_Logger::error(
+				$log_prefix . ' Payment link not requested: no eligible account',
+				['order_id' => $order_id]
+			);
+
+			return $this->unified_link_refusal($unavailable);
+		}
+
+		$api_url   = esc_url($this->base_url . '/api/voucher/payment-link');
+		$not_found = '';
+		$transient = false;
+
+		/*
+		 * The voucher belongs to whichever account sent it, and that is not
+		 * recorded - but the send loop tries accounts in this same order, so the
+		 * first is almost always the one. Any other answers "not found".
+		 */
+		foreach ($accounts as $account) {
+
+			$public_key = $this->sandbox
+				? $account['sandbox_public_key']
+				: $account['live_public_key'];
+
+			$secret_key = $this->sandbox
+				? $account['sandbox_secret_key']
+				: $account['live_secret_key'];
+
+			$response = wp_remote_post($api_url, [
+				'method'    => 'POST',
+				'timeout'   => 30,
+				'body'      => [
+					'voucher_id' => $voucher_id,
+					'api_secret' => $secret_key,
+					'is_sandbox' => $this->sandbox ? '1' : '0',
+				],
+				'headers'   => [
+					'Content-Type'  => 'application/x-www-form-urlencoded',
+					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
+				],
+				'sslverify' => true,
+			]);
+
+			if (is_wp_error($response)) {
+
+				Unified_Payment_Gateway_Logger::error(
+					$log_prefix . ' Payment link request failed to reach the API',
+					[
+						'order_id'      => $order_id,
+						'account_title' => $account['title'] ?? null,
+						'error'         => $response->get_error_message(),
+					]
+				);
+
+				$transient = true;
+				continue;
+			}
+
+			$code = (int) wp_remote_retrieve_response_code($response);
+			$body = json_decode(wp_remote_retrieve_body($response), true);
+			$body = is_array($body) ? $body : [];
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' Payment link API response received',
+				[
+					'order_id'   => $order_id,
+					'http_code'  => $code,
+					'status'     => $body['status'] ?? null,
+					'voucher_id' => $voucher_id,
+				]
+			);
+
+			if (($body['status'] ?? '') === 'success') {
+
+				$link = esc_url_raw((string) ($body['data']['payment_link'] ?? ''), ['https', 'http']);
+
+				if ($link === '') {
+
+					Unified_Payment_Gateway_Logger::error(
+						$log_prefix . ' Payment link missing from a successful response',
+						['order_id' => $order_id]
+					);
+
+					return $this->unified_link_refusal($unavailable);
+				}
+
+				unified_add_unique_order_note(
+					$order,
+					'voucher_link_from_checkout',
+					__('The customer asked for the voucher payment link from the checkout page instead of the voucher email.', 'unified-payment-gateway')
+				);
+
+				$expires_in = $body['data']['expires_in'] ?? null;
+
+				return [
+					'success' => true,
+					'message' => '',
+					'gone'    => false,
+					'data'    => [
+						'payment_link' => $link,
+						'expires_in'   => is_numeric($expires_in) ? max(0, (int) $expires_in) : null,
+					],
+				];
+			}
+
+			$message = !empty($body['message']) ? sanitize_text_field($body['message']) : '';
+
+			/*
+			 * The owning account has answered, so there is no one else to ask.
+			 * Both are worded by Unified for this checkout: a link another
+			 * request is still minting (409), and a voucher or payment that will
+			 * not open - canceled, already paid, refused by the payment side
+			 * (410).
+			 */
+			if ($code === 409) {
+				return $this->unified_link_refusal($message ?: $unavailable);
+			}
+
+			if ($code === 410) {
+				return $this->unified_link_refusal($message ?: $unavailable, true);
+			}
+
+			// Not this account's voucher. Another may own it. A 404 in any other
+			// shape is a Unified without this endpoint yet, not an answer.
+			if ($code === 404) {
+				if (($body['status'] ?? '') === 'error') {
+					$not_found = $message ?: $unavailable;
+				} else {
+					$transient = true;
+				}
+				continue;
+			}
+
+			// Keys this account no longer has, or an outage: another may be fine.
+			if (in_array($code, [401, 403, 500, 502, 503, 504], true)) {
+				$transient = $transient || $code >= 500;
+				continue;
+			}
+
+			// Anything else - validation, throttling - would be the same for all.
+			break;
+		}
+
+		/*
+		 * "Not found" only when every account that answered said so. If the
+		 * one that owns the voucher was down, its "try again" is the truth, and
+		 * the others' "not found" is not.
+		 */
+		if ($not_found !== '' && !$transient) {
+			return $this->unified_link_refusal($not_found, true);
+		}
+
+		return $this->unified_link_refusal($unavailable);
+	}
+
+	/**
+	 * A refusal from unified_get_voucher_payment_link().
+	 *
+	 * @param string $message Shown to the customer as it is.
+	 * @param bool   $gone    Whether a link already on screen should be taken away.
+	 * @return array
+	 */
+	private function unified_link_refusal($message, $gone = false) {
+
+		return [
+			'success' => false,
+			'message' => $message,
+			'gone'    => $gone,
+			'data'    => [],
+		];
+	}
+
+	/**
+	 * Count a request against a sliding window, and say whether it is over.
+	 *
+	 * The same transient pattern process_payment() limits checkout with.
+	 *
+	 * @param string $key    Transient key for this bucket.
+	 * @param int    $max    Requests allowed per window.
+	 * @param int    $window Window length in seconds.
+	 * @return bool True when this request is over the limit (and not counted).
+	 */
+	private function unified_rate_limit_hit($key, $max, $window) {
+
+		$now        = time();
+		$timestamps = array_filter(
+			(array) (get_transient($key) ?: []),
+			fn($ts) => $now - $ts <= $window
+		);
+
+		if (count($timestamps) >= $max) {
+			return true;
+		}
+
+		$timestamps[] = $now;
+		set_transient($key, $timestamps, $window);
+
+		return false;
 	}
 
 	/**

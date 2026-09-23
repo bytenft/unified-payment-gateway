@@ -56,7 +56,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		add_filter('cron_schedules', [$this, 'unified_add_cron_interval']);
 		add_action('unified_cron_event', [$this, 'handle_cron_event']);
 		add_action('wp_ajax_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
-		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']); 
+		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
+		add_action('wp_ajax_unified_voucher_payment_link', [$this, 'handle_voucher_payment_link_ajax']);
+		add_action('wp_ajax_nopriv_unified_voucher_payment_link', [$this, 'handle_voucher_payment_link_ajax']);
 		add_action('wp', function () {
 		    // Allow notices ONLY on checkout page
 		    if ( ! is_checkout() ) {
@@ -166,6 +168,47 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		
 		wp_send_json($status);
 		die;
+	}
+
+	/**
+	 * Hand the checkout's order-received panel its voucher payment link.
+	 *
+	 * Authorised by the order key rather than a nonce. For a guest the page
+	 * nonce is the same for every visitor, and a checkout that creates an
+	 * account logs the customer in and leaves the page's nonce unverifiable -
+	 * whereas the key is the order's own secret, the one WooCommerce's
+	 * order-pay and order-received links carry. The gateway checks it.
+	 */
+	public function handle_voucher_payment_link_ajax() {
+
+		// phpcs:disable WordPress.Security.NonceVerification.Missing -- authorised by the order key, see above.
+		$order_id  = isset($_POST['order_id']) ? absint(wp_unslash($_POST['order_id'])) : 0;
+		$order_key = isset($_POST['order_key']) && is_string($_POST['order_key'])
+			? sanitize_text_field(wp_unslash($_POST['order_key']))
+			: '';
+		// phpcs:enable
+
+		// The booted instance - see handle_unified_gateway_ajax().
+		$gateways = WC()->payment_gateways()->payment_gateways();
+		$gateway  = $gateways['unified'] ?? null;
+
+		if (!$gateway || !method_exists($gateway, 'unified_get_voucher_payment_link')) {
+			wp_send_json_error([
+				'message' => __('We could not get your payment link right now. Please try again in a moment, or contact the store for help.', 'unified-payment-gateway'),
+				'gone'    => false,
+			]);
+		}
+
+		$result = $gateway->unified_get_voucher_payment_link($order_id, $order_key);
+
+		if (!empty($result['success'])) {
+			wp_send_json_success($result['data']);
+		}
+
+		wp_send_json_error([
+			'message' => $result['message'],
+			'gone'    => !empty($result['gone']),
+		]);
 	}
 
 	/**
