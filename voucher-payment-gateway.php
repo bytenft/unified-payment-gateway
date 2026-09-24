@@ -196,6 +196,9 @@ function voucher_cancel_unpaid_order_action($order_id)
 		}
 
 		$uuid           = sanitize_text_field($payment_row['uuid'] ?? '');
+		if (empty($uuid)) {
+			$uuid = sanitize_text_field($order->get_meta('_voucher_pay_id') ?: $order->get_meta('_voucher_active_pay_id'));
+		}
 		$payment_link   = esc_url_raw($payment_row['payment_link'] ?? '');
 		$customer_email = sanitize_email($payment_row['customer_email'] ?? '');
 		$amount         = number_format(floatval($payment_row['amount'] ?? 0), 8, '.', '');
@@ -223,7 +226,7 @@ function voucher_cancel_unpaid_order_action($order_id)
 			'timeout'   => 30,
 			'body'      => json_encode($request_payload),
 			'headers'   => ['Content-Type' => 'application/json'],
-			'sslverify' => true,
+			'sslverify' => apply_filters('voucher_gateway_sslverify', false),
 		]);
 
 		if (is_wp_error($response)) {
