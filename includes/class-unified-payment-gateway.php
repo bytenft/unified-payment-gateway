@@ -1164,6 +1164,10 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 						// Shown on the checkout exactly as Unified worded it.
 						'message'      => $voucher['message'],
 						'reference'    => $voucher['data']['reference'] ?? '',
+						// The email button's own link, so "Not receiving the email?
+						// Click here" opens exactly what the email would. Empty from
+						// a Unified that does not send it, and then not offered.
+						'purchase_url' => esc_url_raw((string) ($voucher['data']['purchase_url'] ?? ''), ['https', 'http']),
 					],
 					// Followed by non-AJAX submissions such as the order-pay page.
 					'redirect'       => $order->get_checkout_order_received_url(),

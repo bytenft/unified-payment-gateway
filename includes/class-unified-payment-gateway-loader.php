@@ -56,7 +56,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		add_filter('cron_schedules', [$this, 'unified_add_cron_interval']);
 		add_action('unified_cron_event', [$this, 'handle_cron_event']);
 		add_action('wp_ajax_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
-		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']); 
+		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
 		add_action('wp', function () {
 		    // Allow notices ONLY on checkout page
 		    if ( ! is_checkout() ) {

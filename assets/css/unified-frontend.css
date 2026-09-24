@@ -252,16 +252,67 @@
     color: #1e293b;
 }
 
-.unified-order-received__foot {
+/* Scoped to the card so theme paragraph margins (.entry-content p) don't win */
+.unified-order-received .unified-order-received__foot {
     margin: 0;
     font-size: 12.5px;
     line-height: 1.7;
     color: #94a3b8;
 }
 
-.unified-order-received__foot strong {
+.unified-order-received .unified-order-received__foot strong {
     color: #64748b;
     overflow-wrap: anywhere;
+}
+
+/* "Not receiving the email? Click here" - the email's button, in a new tab */
+.unified-order-received .unified-order-received__link {
+    margin: 10px 0 0;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: #64748b;
+}
+
+.unified-order-received .unified-order-received__link-anchor {
+    color: #2563eb;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.unified-order-received .unified-order-received__link-anchor:hover,
+.unified-order-received .unified-order-received__link-anchor:focus {
+    color: #1d4ed8;
+}
+
+.unified-order-received .unified-order-received__link-anchor:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.unified-order-received__link-icon {
+    display: inline-block;
+    margin-left: 3px;
+    vertical-align: -1px;
+}
+
+.unified-order-received__link-icon svg {
+    display: block;
+    width: 12px;
+    height: 12px;
+}
+
+.unified-order-received__sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 .unified-thankyou-email-notice {

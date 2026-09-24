@@ -17,6 +17,13 @@
         '<path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3z"></path>' +
         '</svg>';
 
+    const EXTERNAL_ICON =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M14 5h5v5"></path>' +
+        '<path d="M19 5l-9 9"></path>' +
+        '<path d="M18 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4"></path>' +
+        '</svg>';
+
     const UnifiedCheckout = {
 
         PAYMENT_METHOD: unified_params.payment_method,
@@ -466,7 +473,9 @@
                     text('No further action is needed here — check the inbox for '),
                     $('<strong>').text(details.email || ''),
                     text(' whenever you’re ready.')
-                )
+                ),
+
+                this.buildPaymentLinkSection(details)
             );
 
             // Replace the checkout with the panel. Hide rather than remove so
@@ -495,6 +504,69 @@
             }, 300);
 
             $panel[0].focus({ preventScroll: true });
+        },
+
+        /* =========================================================
+         * PAYMENT LINK ("Not receiving the email?")
+         * ========================================================= */
+
+        /**
+         * The voucher email's own button, for a customer whose email has not
+         * arrived: a plain link to the same Unified page, opened in a new tab.
+         *
+         * Nothing is fetched or created here. Opening it does exactly what the
+         * button in the email does - Unified sends the customer on to the
+         * voucher's payment link.
+         */
+        buildPaymentLinkSection: function (details) {
+
+            const link = this.safeLink(details.purchase_url);
+
+            if (!link) {
+                return '';
+            }
+
+            const text = function (value) {
+                return document.createTextNode(value);
+            };
+
+            return $('<p>', { 'class': 'unified-order-received__link' }).append(
+                text('Not receiving the email? '),
+                $('<a>', {
+                    'class': 'unified-order-received__link-anchor',
+                    href: link,
+                    target: '_blank',
+                    rel: 'noopener noreferrer'
+                }).append(
+                    text('Click here'),
+                    $('<span>', { 'class': 'unified-order-received__sr-only' })
+                        .text(' (opens in a new tab)'),
+                    $('<span>', {
+                        'class': 'unified-order-received__link-icon',
+                        'aria-hidden': 'true'
+                    }).html(EXTERNAL_ICON)
+                )
+            );
+        },
+
+        /**
+         * A payment link fit to show and open: http(s) only, or nothing.
+         */
+        safeLink: function (value) {
+
+            if (typeof value !== 'string' || !value) {
+                return '';
+            }
+
+            try {
+                const url = new URL(value);
+
+                return url.protocol === 'https:' || url.protocol === 'http:'
+                    ? url.href
+                    : '';
+            } catch (e) {
+                return '';
+            }
         },
 
         /* =========================================================
