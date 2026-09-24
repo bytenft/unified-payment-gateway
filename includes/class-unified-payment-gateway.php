@@ -1301,8 +1301,9 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			];
 		}
 
-		$api_url      = esc_url($this->base_url . '/api/voucher/send');
-		$last_message = '';
+		$api_url         = esc_url($this->base_url . '/api/voucher/send');
+		$last_message    = '';
+		$last_error_data = null;
 
 		foreach ($accounts as $account) {
 
@@ -1323,6 +1324,46 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				$last_message = sanitize_text_field($data['error'] ?? '');
 				continue;
 			}
+
+			// --- START DAILY LIMIT CHECK ---
+			$limit_url = $this->get_api_url('/api/dailylimit');
+
+			$limit_resp = wp_remote_post($limit_url, [
+				'method'  => 'POST',
+				'timeout' => 30,
+				'body'    => $data,
+				'headers' => [
+					'Content-Type'  => 'application/x-www-form-urlencoded',
+					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
+				],
+			]);
+
+			if (is_wp_error($limit_resp)) {
+				Unified_Payment_Gateway_Logger::warning(
+					$log_prefix . ' Daily limit API WP error',
+					[
+						'account_title' => $account['title'] ?? null,
+						'error'         => $limit_resp->get_error_message(),
+					]
+				);
+				continue;
+			}
+
+			$limit_data = json_decode(wp_remote_retrieve_body($limit_resp), true);
+
+			if (($limit_data['status'] ?? '') === 'error') {
+				Unified_Payment_Gateway_Logger::warning(
+					$log_prefix . ' Account rejected by daily limit API',
+					[
+						'account_title' => $account['title'] ?? null,
+						'response'      => $limit_data,
+					]
+				);
+
+				$last_error_data = $limit_data;
+				continue;
+			}
+			// --- END DAILY LIMIT CHECK ---
 
 			// What the customer actually bought, so the redemption page can show
 			// it back to them. Carried by the voucher only - request-payment
@@ -1391,6 +1432,25 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			if (!in_array($code, [401, 403, 500, 502, 503, 504], true)) {
 				break;
 			}
+		}
+
+		if (!empty($last_error_data)) {
+			if (!empty($last_error_data['max_limit_reached'])) {
+				return [
+					'success' => false,
+					'message' => __('The transaction amount exceeds the maximum allowed limit.', 'unified-payment-gateway'),
+					'data'    => [],
+				];
+			}
+
+			$order->update_meta_data('_unified_limit_exceeded', true);
+			$order->save();
+
+			return [
+				'success' => false,
+				'message' => $last_error_data['message'] ?? __('Payment limit error.', 'unified-payment-gateway'),
+				'data'    => [],
+			];
 		}
 
 		return [
