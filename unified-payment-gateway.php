@@ -148,30 +148,30 @@ function unified_cancel_unpaid_order_action($order_id)
 		return;
 	}
 
-	if ($order->get_status() === 'cancelled') {
-		$pending_time = get_post_meta($order_id, '_pending_order_time', true);
-		$pending_time = is_numeric($pending_time) ? (int) $pending_time : 0;
+	$pending_time = get_post_meta($order_id, '_pending_order_time', true);
+	$pending_time = is_numeric($pending_time) ? (int) $pending_time : 0;
 
-		if ($order->has_status('pending')) {
-			if ((time() - $pending_time) < (30 * 60)) {
-				Unified_Payment_Gateway_Logger::info('Order still within pending timeout. Skipping cancel.', [
-					'source'  => 'unified-payment-gateway',
-					'context' => ['order_id' => $order_id],
-				]);
-				return;
-			}
-
-			$order->update_status('cancelled', 'Order automatically cancelled due to unpaid timeout.');
-			wc_reduce_stock_levels($order_id);
-			wp_cache_delete('unified_payment_link_uuid_' . $order_id, 'unified_payment_gateway');
-			wp_cache_delete('unified_payment_row_' . $order_id, 'unified_payment_gateway'); // Clear row cache
-
-			Unified_Payment_Gateway_Logger::info('Order auto-cancelled due to unpaid timeout.', [
+	if ($order->has_status('pending')) {
+		if ((time() - $pending_time) < (30 * 60)) {
+			Unified_Payment_Gateway_Logger::info('Order still within pending timeout. Skipping cancel.', [
 				'source'  => 'unified-payment-gateway',
 				'context' => ['order_id' => $order_id],
 			]);
+			return;
 		}
 
+		$order->update_status('cancelled', 'Order automatically cancelled due to unpaid timeout.');
+		wc_reduce_stock_levels($order_id);
+		wp_cache_delete('unified_payment_link_uuid_' . $order_id, 'unified_payment_gateway');
+		wp_cache_delete('unified_payment_row_' . $order_id, 'unified_payment_gateway'); // Clear row cache
+
+		Unified_Payment_Gateway_Logger::info('Order auto-cancelled due to unpaid timeout.', [
+			'source'  => 'unified-payment-gateway',
+			'context' => ['order_id' => $order_id],
+		]);
+	}
+
+	if ($order->get_status() === 'cancelled') {
 		$table_name  = $wpdb->prefix . 'order_payment_link';
 		$cache_key   = 'unified_payment_row_' . intval($order_id);
 		$cache_group = 'unified_payment_gateway';
@@ -214,7 +214,7 @@ function unified_cancel_unpaid_order_action($order_id)
 
 		$request_payload = [
 			'order_id'   => $order_id,
-			'order_uuid' => $uuid,
+			'order_uuid' => base64_encode($uuid),
 			'status'     => 'canceled',
 		];
 
