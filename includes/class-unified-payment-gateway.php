@@ -1562,6 +1562,10 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			$order->update_meta_data('_unified_voucher_id', sanitize_text_field($voucher['voucher_id']));
 		}
 
+		if (!empty($voucher['purchase_url'])) {
+			$order->update_meta_data('_unified_payment_link', esc_url_raw($voucher['purchase_url']));
+		}
+
 		if ($reference !== '') {
 			$order->update_meta_data('_unified_voucher_reference', $reference);
 		}
