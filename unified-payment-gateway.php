@@ -149,6 +149,13 @@ function unified_cancel_unpaid_order_action($order_id)
 	}
 
 	if ($order->get_status() === 'cancelled') {
+
+		// Prevent duplicate cancellation calls for the same order
+		if ($order->get_meta('_unified_cancel_synced') || $order->get_meta('_unified_cancel_sent')) {
+			Unified_Payment_Gateway_Logger::info("[Order #{$order_id}] Portal cancellation already processed; skipping duplicate request.");
+			return;
+		}
+
 		$pending_time = get_post_meta($order_id, '_pending_order_time', true);
 		$pending_time = is_numeric($pending_time) ? (int) $pending_time : 0;
 
@@ -172,85 +179,62 @@ function unified_cancel_unpaid_order_action($order_id)
 			]);
 		}
 
-		$table_name  = $wpdb->prefix . 'order_payment_link';
-		$cache_key   = 'unified_payment_row_' . intval($order_id);
-		$cache_group = 'unified_payment_gateway';
+		// Fetch UUID and reference stored in WooCommerce order metadata (HPOS compatible)
+		$voucher_id   = $order->get_meta('_unified_voucher_id') ?: get_post_meta($order_id, '_unified_voucher_id', true);
+		$reference    = $order->get_meta('_unified_voucher_reference') ?: get_post_meta($order_id, '_unified_voucher_reference', true);
+		$payment_link = $order->get_meta('_unified_payment_link') ?: get_post_meta($order_id, '_unified_payment_link', true);
 
-		$payment_row = wp_cache_get($cache_key, $cache_group);
-
-		if (false === $payment_row) {
-			// Escape table name safely
-			$safe_table_name = esc_sql($table_name);
-
-			// Build query safely: only $order_id is dynamic
-			$sql = "SELECT * FROM {$safe_table_name} WHERE order_id = %d LIMIT 1";
-
-			// PHPCS: ignore direct DB query warning here
-			// PHPCS: ignore PreparedSQL.NotPrepared warning for table name interpolation
-			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery
-			$payment_row = $wpdb->get_row($wpdb->prepare($sql, intval($order_id)), ARRAY_A);
-
-			if ($payment_row) {
-				wp_cache_set($cache_key, $payment_row, $cache_group, 5 * MINUTE_IN_SECONDS);
-			}
-		}
-
-		$uuid           = sanitize_text_field($payment_row['uuid'] ?? '');
-		$payment_link   = esc_url_raw($payment_row['payment_link'] ?? '');
-		$customer_email = sanitize_email($payment_row['customer_email'] ?? '');
-		$amount         = number_format(floatval($payment_row['amount'] ?? 0), 8, '.', '');
-
-		if (empty($uuid)) {
-			Unified_Payment_Gateway_Logger::error('Missing or invalid UUID in payment link table.', [
+		if (empty($voucher_id) && empty($reference)) {
+			Unified_Payment_Gateway_Logger::info('No voucher ID or reference found; skipping Portal cancellation.', [
 				'source'  => 'unified-payment-gateway',
-				'context' => ['order_id' => $order_id, 'uuid' => $uuid],
+				'context' => ['order_id' => $order_id],
 			]);
 			return;
 		}
 
-		$apiPath  = '/api/cancel-order-link';
-		$url      = UNIFIED_BASE_URL . $apiPath;
-		$cleanUrl = esc_url(preg_replace('#(?<!:)//+#', '/', $url));
+		// Mark order as cancel synced before API call to lock out concurrent hooks
+		$order->update_meta_data('_unified_cancel_synced', true);
+		$order->update_meta_data('_unified_cancel_sent', true);
+		$order->save();
 
-		$request_payload = [
-			'order_id'   => $order_id,
-			'order_uuid' => $uuid,
-			'status'     => 'canceled',
+		$cancel_url     = esc_url_raw(set_url_scheme(UNIFIED_BASE_URL . '/api/cancel-order-link', 'https'));
+		$cancel_payload = [
+			'order_id'            => $order_id,
+			'order_uuid'          => sanitize_text_field($voucher_id), // voucher_id is the UUID
+			'payment_link'        => !empty($payment_link) ? base64_encode($payment_link) : '',
+			'payment_link_raw'    => sanitize_text_field($payment_link),
+			'status'              => 'canceled',
 		];
 
-		$response = wp_remote_post($cleanUrl, [
+		Unified_Payment_Gateway_Logger::info('Sending payment link cancellation to Portal via order meta.', [
+			'source'  => 'unified-payment-gateway',
+			'context' => [
+				'order_id'     => $order_id,
+				'order_uuid'   => $voucher_id,
+				'reference'    => $reference,
+				'payment_link' => $payment_link,
+				'url'          => $cancel_url,
+			],
+		]);
+
+		$cancel_response = wp_remote_post($cancel_url, [
 			'method'    => 'POST',
 			'timeout'   => 30,
-			'body'      => json_encode($request_payload),
+			'body'      => wp_json_encode($cancel_payload),
 			'headers'   => ['Content-Type' => 'application/json'],
 			'sslverify' => true,
 		]);
 
-		if (is_wp_error($response)) {
-			Unified_Payment_Gateway_Logger::error("Cancel API call failed. Order ID: {$order_id}", [
-				'source'  => 'unified-payment-gateway',
-				'context' => [
-					'order_id' => $order_id,
-					'uuid'     => $uuid,
-					'error'    => $response->get_error_message(),
-				],
-			]);
-		} else {
-			$response_body    = wp_remote_retrieve_body($response);
-			$decoded_response = json_decode($response_body, true);
+		$cancel_code = is_wp_error($cancel_response) ? 0 : (int) wp_remote_retrieve_response_code($cancel_response);
+		$cancel_body = is_wp_error($cancel_response) ? [] : json_decode(wp_remote_retrieve_body($cancel_response), true);
 
-			Unified_Payment_Gateway_Logger::info("Cancel API response received for Order ID: {$order_id}.", [
-				'source'  => 'unified-payment-gateway',
-				'context' => [
-					'order_id'       => $order_id,
-					'uuid'           => $uuid,
-					'payment_link'   => $payment_link,
-					'customer_email' => $customer_email,
-					'amount'         => number_format((float) $amount, 2, '.', ''),
-					'response'       => $decoded_response,
-				],
-			]);
-		}
+		Unified_Payment_Gateway_Logger::info('Portal payment link cancellation response.', [
+			'source'  => 'unified-payment-gateway',
+			'context' => [
+				'order_id'  => $order_id,
+				'http_code' => $cancel_code,
+				'response'  => $cancel_body,
+			],
+		]);
 	}
-	
 }
