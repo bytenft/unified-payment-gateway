@@ -183,6 +183,31 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		}
 
 		// -------------------------
+		// 2b. PAYMENT LINK RECORD
+		// -------------------------
+		/*
+		 * Checkout creates no payment link. The voucher flow creates the real
+		 * one when the customer opens the button in their email, and this report
+		 * - the return to the store, or the webhook behind it - is where the
+		 * store is first told which payment link the order has.
+		 *
+		 * Recorded for Unified orders only, so DFinSell, ByteNFT and any other
+		 * gateway sharing this table keep their own rows.
+		 */
+		if (
+			!empty($pay_id) &&
+			$order->get_payment_method() === 'unified' &&
+			function_exists('unified_store_order_payment_link')
+		) {
+			unified_store_order_payment_link($order, [
+				'uuid'           => $pay_id,
+				'payment_link'   => $data['payment_link'] ?? '',
+				'customer_email' => $data['customer_email'] ?? '',
+				'amount'         => $data['amount'] ?? '',
+			]);
+		}
+
+		// -------------------------
 		// 3. EVENT TYPE
 		// -------------------------
 		$event_type = ($method === 'POST')
