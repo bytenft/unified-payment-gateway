@@ -403,6 +403,8 @@ class Unified_Payment_State_Engine
             ?? $payload['order_status']
             ?? null;
 
+        $status = $status ? strtolower((string)$status) : null;
+
         return match ($status) {
             'success', 'paid', 'completed'  => 'success',
             'failed'                        => 'failed',
@@ -513,7 +515,7 @@ class Unified_Payment_State_Engine
 
         // 2. SAFETY: API status (current response)
         if (!empty($api_status)) {
-            $mapped = match ($api_status) {
+            $mapped = match (strtolower((string)$api_status)) {
                 'success', 'paid', 'completed' => 'success',
                 'failed' => 'failed',
                 'cancelled', 'canceled' => 'cancelled',

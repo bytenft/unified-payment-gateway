@@ -353,7 +353,7 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 	 */
 	private function unified_map_status($api_status, $success_target) 
 	{
-		switch ($api_status) {
+		switch (strtolower((string)$api_status)) {
 			case 'completed': return $success_target;
 			case 'failed':    return 'failed';
 			case 'expired':
