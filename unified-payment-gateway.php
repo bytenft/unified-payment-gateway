@@ -43,6 +43,7 @@ UNIFIED_PAYMENT_GATEWAY_Loader::get_instance();
 
 add_action('woocommerce_cancel_unpaid_order', 'unified_cancel_unpaid_order_action');
 add_action('woocommerce_order_status_cancelled', 'unified_cancel_unpaid_order_action');
+add_action('woocommerce_order_status_failed', 'unified_cancel_unpaid_order_action');
 add_action('woocommerce_order_status_changed', 'unified_cancel_unpaid_order_action', 10, 4);
 
 add_filter('woocommerce_get_checkout_order_received_url', function($url, $order) {
@@ -126,9 +127,9 @@ function unified_cancel_unpaid_order_action($order_id)
 	}
 
 	/*
-	 * Only process orders that are actually cancelled.
+	 * Only process orders that are actually cancelled or failed.
 	 */
-	if (!$order->has_status('cancelled')) {
+	if (!$order->has_status(array('cancelled', 'failed'))) {
 		return;
 	}
 
@@ -261,7 +262,7 @@ function unified_cancel_unpaid_order_action($order_id)
 	$request_payload = [
 		'order_id'   => $order_id,
 		'order_uuid' => $uuid,
-		'status'     => 'canceled',
+		'status'     => $order->get_status() === 'failed' ? 'failed' : 'canceled',
 	];
 
 	$response = wp_remote_post(
