@@ -126,9 +126,9 @@ function unified_cancel_unpaid_order_action($order_id)
 	}
 
 	/*
-	 * Only process orders that are actually cancelled.
+	 * Only process orders that are actually cancelled or failed.
 	 */
-	if (!$order->has_status('cancelled')) {
+	if (!$order->has_status(['cancelled', 'failed'])) {
 		return;
 	}
 
@@ -261,7 +261,7 @@ function unified_cancel_unpaid_order_action($order_id)
 	$request_payload = [
 		'order_id'   => $order_id,
 		'order_uuid' => $uuid,
-		'status'     => 'canceled',
+		'status'     => $order->has_status('failed') ? 'failed' : 'canceled',
 	];
 
 	$response = wp_remote_post(
