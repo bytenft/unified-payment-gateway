@@ -169,11 +169,12 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		// -------------------------
 		if ($method === 'POST') {
 
-			$decoded_nonce = base64_decode($api_key_raw);
+			$decoded_nonce = base64_decode($api_key_raw, true);
+			$key_to_verify = ($decoded_nonce !== false && !empty($decoded_nonce)) ? $decoded_nonce : $api_key_raw;
 
 			if (
 				empty($api_key_raw) ||
-				!$this->unified_verify_api_key($decoded_nonce)
+				(!$this->unified_verify_api_key($key_to_verify) && !$this->unified_verify_api_key($api_key_raw))
 			) {
 				return new WP_REST_Response([
 					'success'    => false,
@@ -321,14 +322,20 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		);
 	}
 
-	/**
-	 * HELPER: Handles API responses and Safari-safe redirects
-	 */
 	private function unified_finalize_response($method, $order, $success, $message, $target_status = '', $redirect_url = '') 
 	{
-		// If it's a server-to-server Webhook, just return JSON
+		// If it's a server-to-server Webhook, just return JSON with redirect url
 		if ($method === 'POST') {
-			return new WP_REST_Response(['success' => $success, 'message' => $message], 200);
+			if ($success && WC()->cart) {
+				WC()->cart->empty_cart();
+			}
+			$return_url = $redirect_url ?: ($order ? $order->get_checkout_order_received_url() : null);
+			return new WP_REST_Response([
+				'success'            => $success,
+				'message'            => $message,
+				'payment_return_url' => $return_url,
+				'order_status'       => $order ? $order->get_status() : $target_status,
+			], 200);
 		}
 
 		// --- SAFARI/SESSION FIX ---
