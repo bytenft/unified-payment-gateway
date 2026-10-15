@@ -59,18 +59,20 @@ add_filter('woocommerce_get_checkout_order_received_url', function($url, $order)
 	$wc_status    = $order->get_status();
 	$engine_state = $order->get_meta('_unified_state');
 	$success_meta = $order->get_meta('_unified_payment_success');
+	$voucher_sent = $order->get_meta('_unified_voucher_emailed_at');
 	
 	Unified_Payment_Gateway_Logger::info(	
 		sprintf(
-			"[Order #%d] ThankYou Filter | WC=%s | Engine=%s | Success=%s",
+			"[Order #%d] ThankYou Filter | WC=%s | Engine=%s | Success=%s | VoucherSent=%s",
 			$order->get_id(),
 			$wc_status,
 			$engine_state,
-			$success_meta ?: 'EMPTY'
+			$success_meta ?: 'EMPTY',
+			!empty($voucher_sent) ? 'YES' : 'NO'
 		)
 	);
 
-    $is_valid = in_array($wc_status, ['processing', 'completed'], true) || $success_meta === 'yes' || $engine_state === 'success';
+    $is_valid = in_array($wc_status, ['processing', 'completed', 'pending'], true) || $success_meta === 'yes' || $engine_state === 'success' || !empty($voucher_sent);
 
 	if (!$is_valid) {
 		Unified_Payment_Gateway_Logger::info(
