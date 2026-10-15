@@ -1118,6 +1118,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			// voucher, and the payment link behind its button is created when they
 			// open it. All this plugin does is ask for that email and repeat what
 			// Unified says about it.
+			$order->update_status('pending', __('Awaiting voucher purchase.', 'unified-payment-gateway'));
+
 			$voucher = $this->unified_request_voucher_email($order);
 
 			if (!$voucher['success']) {
@@ -1137,9 +1139,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 					$order_id
 				);
 			}
-
-			// Only now is there a voucher to await.
-			$order->update_status('pending', __('Awaiting voucher purchase.', 'unified-payment-gateway'));
 
 			$this->unified_record_voucher_sent($order, $voucher['data']);
 
@@ -1381,7 +1380,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'body'      => $data,
 				'headers'   => [
 					'Content-Type'  => 'application/x-www-form-urlencoded',
-					'Accept'        => 'application/json',
 					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
 				],
 				'sslverify' => true,
@@ -1402,142 +1400,31 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				continue;
 			}
 
-			$code     = (int) wp_remote_retrieve_response_code($response);
-			$raw_body = wp_remote_retrieve_body($response);
-			$body     = json_decode($raw_body, true);
-			$body     = is_array($body) ? $body : [];
-			$payload  = isset($body['data']) && is_array($body['data']) ? $body['data'] : [];
+			$code = (int) wp_remote_retrieve_response_code($response);
+			$body = json_decode(wp_remote_retrieve_body($response), true);
+			$body = is_array($body) ? $body : [];
 
-			$purchase_url = $this->unified_clean_payment_link($payload['purchase_url'] ?? '');
+			$message = isset($body['message']) ? sanitize_text_field($body['message']) : '';
 
 			Unified_Payment_Gateway_Logger::info(
 				$log_prefix . ' Voucher API response received',
 				[
-					'order_id'         => $order_id,
-					'http_code'        => $code,
-					'status'           => $body['status'] ?? null,
-					'account_title'    => $account['title'] ?? null,
-					'voucher_id'       => $payload['voucher_id'] ?? null,
-					'reference'        => $payload['reference'] ?? null,
-					'has_purchase_url' => '' !== $purchase_url,
+					'order_id'   => $order_id,
+					'http_code'  => $code,
+					'status'     => $body['status'] ?? null,
+					'voucher_id' => $body['data']['voucher_id'] ?? null,
+					'reference'  => $body['data']['reference'] ?? null,
 				]
 			);
 
 			if (($body['status'] ?? '') === 'success') {
 
-				$payload['purchase_url'] = $purchase_url;
-
 				return [
 					'success' => true,
-					'message' => isset($body['message']) ? sanitize_text_field($body['message']) : '',
-					'data'    => $payload,
+					'message' => $message,
+					'data'    => isset($body['data']) && is_array($body['data']) ? $body['data'] : [],
 				];
 			}
-
-			// Fallback: If /api/voucher/send returns 405 or 404 (route not yet deployed on server),
-			// fall back to the live /api/request-payment endpoint.
-			if (405 === $code || 404 === $code) {
-				Unified_Payment_Gateway_Logger::info(
-					$log_prefix . ' /api/voucher/send returned ' . $code . '; falling back to /api/request-payment',
-					[
-						'account_title' => $account['title'] ?? null,
-					]
-				);
-
-				$fallback_url      = esc_url($this->base_url . '/api/request-payment');
-				$fallback_response = wp_remote_post($fallback_url, [
-					'method'    => 'POST',
-					'timeout'   => 30,
-					'body'      => $data,
-					'headers'   => [
-						'Content-Type'  => 'application/x-www-form-urlencoded',
-						'Accept'        => 'application/json',
-						'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
-					],
-					'sslverify' => true,
-				]);
-
-				if (!is_wp_error($fallback_response)) {
-					$fb_code     = (int) wp_remote_retrieve_response_code($fallback_response);
-					$fb_raw_body = wp_remote_retrieve_body($fallback_response);
-					$fb_body     = json_decode($fb_raw_body, true);
-					$fb_body     = is_array($fb_body) ? $fb_body : [];
-					$fb_data     = isset($fb_body['data']) && is_array($fb_body['data']) ? $fb_body['data'] : [];
-
-					if (200 === $fb_code && ($fb_body['status'] ?? '') === 'success' && !empty($fb_data['payment_link'])) {
-						$purchase_url = $this->unified_clean_payment_link($fb_data['payment_link']);
-
-						Unified_Payment_Gateway_Logger::info(
-							$log_prefix . ' Fallback /api/request-payment succeeded',
-							[
-								'account_title' => $account['title'] ?? null,
-								'payment_link'  => $purchase_url,
-								'pay_id'        => $fb_data['pay_id'] ?? null,
-							]
-						);
-
-						$voucher_id = sanitize_text_field($fb_data['pay_id'] ?? wp_generate_uuid4());
-						$ref        = (string) $order->get_order_number();
-						$amount     = (float) ($fb_data['amount'] ?? $order->get_total());
-						$cust_email = sanitize_email($fb_data['customer_email'] ?? $order->get_billing_email());
-
-						// Store in order_payment_link table for consistency and cancellation tracking
-						unified_store_order_payment_link($order, [
-							'uuid'           => $voucher_id,
-							'payment_link'   => $purchase_url,
-							'customer_email' => $cust_email,
-							'amount'         => $amount,
-						]);
-
-						// Also notify remote ByteNFT backend to send payment link if route exists
-						$this->unified_send_remote_payment_link($purchase_url, $order, $public_key, $secret_key);
-
-						return [
-							'success' => true,
-							'message' => isset($fb_body['message']) ? sanitize_text_field($fb_body['message']) : __('Payment request created successfully.', 'unified-payment-gateway'),
-							'data'    => [
-								'voucher_id'     => $voucher_id,
-								'reference'      => $ref,
-								'amount'         => $amount,
-								'currency'       => $order->get_currency(),
-								'customer_email' => $cust_email,
-								'purchase_url'   => $purchase_url,
-							],
-						];
-					}
-
-					Unified_Payment_Gateway_Logger::warning(
-						$log_prefix . ' Fallback /api/request-payment failed with HTTP ' . $fb_code,
-						[
-							'account_title' => $account['title'] ?? null,
-							'raw_snippet'   => substr(trim($fb_raw_body), 0, 300),
-						]
-					);
-				}
-			}
-
-			// Same message precedence the direct payment flow reads failures with.
-			$message = '';
-			foreach ([$body['message'] ?? '', $body['error'] ?? '', $payload['error'] ?? ''] as $candidate) {
-				if (is_string($candidate) && '' !== $candidate) {
-					$message = sanitize_text_field($candidate);
-					break;
-				}
-			}
-
-			if ('' === $message && $code >= 400) {
-				$message = sprintf(__('Server returned HTTP %d', 'unified-payment-gateway'), $code);
-			}
-
-			Unified_Payment_Gateway_Logger::error(
-				$log_prefix . ' Voucher request rejected: ' . ($message ?: 'no message returned'),
-				[
-					'order_id'      => $order_id,
-					'http_code'     => $code,
-					'account_title' => $account['title'] ?? null,
-					'raw_snippet'   => substr(trim($raw_body), 0, 300),
-				]
-			);
 
 			$last_message = $message ?: $last_message;
 
@@ -1567,33 +1454,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'success' => false,
 				'message' => $last_error_data['message'] ?? __('Payment limit error.', 'unified-payment-gateway'),
 				'data'    => [],
-			];
-		}
-
-		// Sandbox Mock Fallback: if both APIs fail and in Sandbox mode, simulate voucher response
-		if ($this->sandbox) {
-			Unified_Payment_Gateway_Logger::warning(
-				$log_prefix . ' Both APIs failed; activating Sandbox Mock Fallback',
-				[
-					'order_id' => $order_id,
-				]
-			);
-
-			$mock_uuid    = wp_generate_uuid4();
-			$purchase_url = esc_url_raw($this->base_url . '/voucher/redeem/' . $mock_uuid);
-
-			return [
-				'success' => true,
-				'message' => __('Sandbox mode: voucher simulated successfully.', 'unified-payment-gateway'),
-				'data'    => [
-					'voucher_id'      => 'sandbox_' . $mock_uuid,
-					'reference'       => (string) $order->get_order_number(),
-					'amount'          => (float) $order->get_total(),
-					'currency'        => $order->get_currency(),
-					'customer_email'  => sanitize_email($order->get_billing_email()),
-					'purchase_url'    => $purchase_url,
-					'is_sandbox_mock' => true,
-				],
 			];
 		}
 
@@ -1684,138 +1544,16 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 	}
 
 	/**
-	 * Only an http(s) link is worth putting in front of a customer.
-	 *
-	 * @param mixed $link Link as the API gave it.
-	 * @return string The link, or '' when it is not one a customer can open.
-	 */
-	private function unified_clean_payment_link($link) {
-
-		if (!is_scalar($link)) {
-			return '';
-		}
-
-		$link = esc_url_raw(trim((string) $link), ['https', 'http']);
-
-		if ('' === $link) {
-			return '';
-		}
-
-		$scheme = wp_parse_url($link, PHP_URL_SCHEME);
-		$host   = wp_parse_url($link, PHP_URL_HOST);
-
-		if (!in_array($scheme, ['https', 'http'], true) || empty($host)) {
-			return '';
-		}
-
-		return $link;
-	}
-
-	/**
-	 * Dispatch payment link through the ByteNFT platform's remote notification endpoint if available.
-	 *
-	 * @param string   $payment_link
-	 * @param WC_Order $order
-	 * @param string   $public_key
-	 * @param string   $secret_key
-	 */
-	private function unified_send_remote_payment_link($payment_link, $order, $public_key, $secret_key) {
-		$send_url = esc_url($this->base_url . '/api/payment-link/send');
-		$email    = sanitize_email($order->get_billing_email());
-		$phone    = sanitize_text_field($order->get_billing_phone());
-
-		$body = [
-			'payment_link' => $payment_link,
-			'email'        => $email,
-		];
-		if (!empty($phone)) {
-			$body['phone'] = $phone;
-		}
-
-		wp_remote_post($send_url, [
-			'method'    => 'POST',
-			'timeout'   => 15,
-			'body'      => $body,
-			'headers'   => [
-				'Content-Type'  => 'application/x-www-form-urlencoded',
-				'Accept'        => 'application/json',
-				'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
-				'x-api-secret'  => sanitize_text_field($secret_key),
-			],
-			'sslverify' => true,
-		]);
-	}
-
-	/**
-	 * Send the voucher payment email directly to the customer with their payment/redemption link.
-	 *
-	 * @param WC_Order $order
-	 * @param string   $purchase_url
-	 * @return bool
-	 */
-	public function unified_send_voucher_email($order, $purchase_url) {
-		$to = sanitize_email($order->get_billing_email());
-		if (empty($to) || empty($purchase_url)) {
-			return false;
-		}
-
-		$site_title   = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
-		$order_number = $order->get_order_number();
-		$total        = $this->unified_plain_price($order->get_total(), $order);
-		$first_name   = $order->get_billing_first_name();
-
-		$subject = sprintf(
-			/* translators: 1: site title, 2: order number, 3: total */
-			__('%1$s: Complete your order #%2$s (%3$s) - Payment Voucher', 'unified-payment-gateway'),
-			$site_title,
-			$order_number,
-			$total
-		);
-
-		$message  = '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #374151; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px;">';
-		$message .= '<div style="text-align: center; padding-bottom: 20px; border-bottom: 1px solid #e5e7eb; margin-bottom: 24px;">';
-		$message .= '<h2 style="color: #4338ca; margin: 0; font-size: 22px;">' . esc_html__('Complete Your Order Payment', 'unified-payment-gateway') . '</h2>';
-		$message .= '</div>';
-		$message .= '<p style="font-size: 16px;">' . sprintf(esc_html__('Hi %s,', 'unified-payment-gateway'), esc_html($first_name ?: __('Customer', 'unified-payment-gateway'))) . '</p>';
-		$message .= '<p style="font-size: 15px; line-height: 1.5;">' . sprintf(esc_html__('Thank you for placing order #%1$s at %2$s. Your payment voucher has been generated for %3$s.', 'unified-payment-gateway'), '<strong>' . esc_html($order_number) . '</strong>', '<strong>' . esc_html($site_title) . '</strong>', '<strong style="color: #4338ca;">' . esc_html($total) . '</strong>') . '</p>';
-		$message .= '<p style="font-size: 15px; line-height: 1.5;">' . esc_html__('Please click the button below to purchase your voucher and complete your payment securely:', 'unified-payment-gateway') . '</p>';
-		$message .= '<div style="text-align: center; margin: 32px 0;">';
-		$message .= '<a href="' . esc_url($purchase_url) . '" target="_blank" rel="noopener noreferrer" style="background-color: #4338ca; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px; display: inline-block;">' . esc_html__('Purchase Voucher & Pay Now', 'unified-payment-gateway') . '</a>';
-		$message .= '</div>';
-		$message .= '<p style="font-size: 13px; color: #6b7280; line-height: 1.4;">' . esc_html__('If the button above does not work, copy and paste this link into your browser:', 'unified-payment-gateway') . '<br><a href="' . esc_url($purchase_url) . '" style="color: #4338ca; word-break: break-all;">' . esc_url($purchase_url) . '</a></p>';
-		$message .= '<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;">';
-		$message .= '<p style="font-size: 12px; color: #9ca3af; margin: 0; text-align: center;">' . sprintf(esc_html__('This payment request was generated for Order #%s.', 'unified-payment-gateway'), esc_html($order_number)) . '</p>';
-		$message .= '</div>';
-
-		$headers = [
-			'Content-Type: text/html; charset=UTF-8',
-			'From: ' . $site_title . ' <' . (get_option('admin_email') ?: 'no-reply@' . (wp_parse_url(home_url(), PHP_URL_HOST) ?: 'localhost')) . '>',
-		];
-
-		$sent = wp_mail($to, $subject, $message, $headers);
-
-		Unified_Payment_Gateway_Logger::info(
-			"[Order #{$order->get_id()}] Voucher payment email " . ($sent ? 'sent successfully' : 'failed to send') . " to {$to}",
-			[
-				'payment_link' => $purchase_url,
-			]
-		);
-
-		return $sent;
-	}
-
-	/**
 	 * Note on the order that Unified has the voucher in hand.
 	 *
 	 * @param WC_Order $order   Order being paid.
-	 * @param array    $voucher Data block from /api/voucher/send or fallback.
+	 * @param array    $voucher data block from /api/voucher/send.
 	 * @return void
 	 */
 	private function unified_record_voucher_sent($order, $voucher) {
 
 		$reference = isset($voucher['reference']) ? sanitize_text_field($voucher['reference']) : '';
 		$to        = sanitize_email($voucher['customer_email'] ?? $order->get_billing_email());
-		$link      = $this->unified_clean_payment_link($voucher['purchase_url'] ?? '');
 
 		// Read by the order-received notice to say payment is still to come.
 		$order->update_meta_data('_unified_voucher_emailed_at', time());
@@ -1826,12 +1564,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 		if ($reference !== '') {
 			$order->update_meta_data('_unified_voucher_reference', $reference);
-		}
-
-		// Ensure the customer receives their voucher payment email with the payment link.
-		if ('' !== $link) {
-			$order->update_meta_data('_unified_voucher_purchase_url', $link);
-			$this->unified_send_voucher_email($order, $link);
 		}
 
 		$order->add_order_note(
@@ -1891,17 +1623,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'<strong>' . esc_html($this->unified_mask_email($order->get_billing_email())) . '</strong>'
 			)
 		);
-
-		$link = $this->unified_clean_payment_link($order->get_meta('_unified_voucher_purchase_url'));
-
-		if ('' !== $link) {
-
-			printf(
-				'<p class="unified-thankyou-payment-link"><a href="%1$s" target="_blank" rel="noopener noreferrer">%2$s</a></p>',
-				esc_url($link),
-				esc_html__('Purchase your voucher', 'unified-payment-gateway')
-			);
-		}
 	}
 
 	private function is_block_checkout_request() {
