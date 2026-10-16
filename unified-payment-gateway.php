@@ -103,6 +103,7 @@ add_filter('woocommerce_get_checkout_order_received_url', function($url, $order)
  *
  * @param int $order_id The ID of the order.
  */
+if (!function_exists('unified_cancel_unpaid_order_action')) {
 function unified_cancel_unpaid_order_action($order_id)
 {
 	global $wpdb;
@@ -325,4 +326,5 @@ function unified_cancel_unpaid_order_action($order_id)
 			],
 		]
 	);
+}
 }
