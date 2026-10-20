@@ -1135,7 +1135,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 					'fail',
 					$voucher_error,
 					[],
-					502,
+					400,
 					$order_id
 				);
 			}
@@ -1305,9 +1305,9 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			];
 		}
 
-		$api_url         = esc_url($this->base_url . '/api/voucher/send');
-		$last_message    = '';
-		$last_error_data = null;
+		$selected_account = null;
+		$payment_data     = null;
+		$last_error_data  = null;
 
 		foreach ($accounts as $account) {
 
@@ -1324,8 +1324,13 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			$data = $this->unified_prepare_payment_data($order, $public_key, $secret_key);
 
 			if (is_array($data) && ($data['result'] ?? '') === 'fail') {
-
-				$last_message = sanitize_text_field($data['error'] ?? '');
+				Unified_Payment_Gateway_Logger::warning(
+					$log_prefix . ' Account preparation failed',
+					[
+						'account_title' => $account['title'] ?? null,
+						'error'         => $data['error'] ?? null,
+					]
+				);
 				continue;
 			}
 
@@ -1369,97 +1374,113 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			}
 			// --- END DAILY LIMIT CHECK ---
 
-			// What the customer actually bought, so the redemption page can show
-			// it back to them. Carried by the voucher only - request-payment
-			// neither wants nor keeps it.
-			$data['items'] = $this->unified_get_voucher_items($order);
-
-			$response = wp_remote_post($api_url, [
-				'method'    => 'POST',
-				'timeout'   => 30,
-				'body'      => $data,
-				'headers'   => [
-					'Content-Type'  => 'application/x-www-form-urlencoded',
-					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
-				],
-				'sslverify' => true,
-			]);
-
-			if (is_wp_error($response)) {
-
-				Unified_Payment_Gateway_Logger::error(
-					$log_prefix . ' Voucher request failed to reach the API',
-					[
-						'order_id'      => $order_id,
-						'account_title' => $account['title'] ?? null,
-						'error'         => $response->get_error_message(),
-					]
-				);
-
-				$last_message = __('We could not reach the voucher service. Please try again in a moment.', 'unified-payment-gateway');
-				continue;
-			}
-
-			$code = (int) wp_remote_retrieve_response_code($response);
-			$body = json_decode(wp_remote_retrieve_body($response), true);
-			$body = is_array($body) ? $body : [];
-
-			$message = isset($body['message']) ? sanitize_text_field($body['message']) : '';
-
 			Unified_Payment_Gateway_Logger::info(
-				$log_prefix . ' Voucher API response received',
+				$log_prefix . ' Account selected',
 				[
-					'order_id'   => $order_id,
-					'http_code'  => $code,
-					'status'     => $body['status'] ?? null,
-					'voucher_id' => $body['data']['voucher_id'] ?? null,
-					'reference'  => $body['data']['reference'] ?? null,
+					'account_title' => $account['title'] ?? null,
 				]
 			);
 
-			if (($body['status'] ?? '') === 'success') {
-
-				return [
-					'success' => true,
-					'message' => $message,
-					'data'    => isset($body['data']) && is_array($body['data']) ? $body['data'] : [],
-				];
-			}
-
-			$last_message = $message ?: $last_message;
-
-			/*
-			 * What one account is refused - a key that is not accepted, a service
-			 * that is down - the next may be granted. A refusal of the order
-			 * itself would only be repeated, so it is handed back as it is.
-			 */
-			if (!in_array($code, [401, 403, 500, 502, 503, 504], true)) {
-				break;
-			}
+			$selected_account = $account;
+			$payment_data     = $data;
+			break;
 		}
 
-		if (!empty($last_error_data)) {
-			if (!empty($last_error_data['max_limit_reached'])) {
+		if (!$selected_account) {
+			if ($last_error_data) {
+				if (!empty($last_error_data['max_limit_reached'])) {
+					return [
+						'success' => false,
+						'message' => __('The transaction amount exceeds the maximum allowed limit.', 'unified-payment-gateway'),
+						'data'    => [],
+					];
+				}
+
+				$order->update_meta_data('_unified_limit_exceeded', true);
+				$order->save();
+
 				return [
 					'success' => false,
-					'message' => __('The transaction amount exceeds the maximum allowed limit.', 'unified-payment-gateway'),
+					'message' => $last_error_data['message'] ?? __('Payment limit error.', 'unified-payment-gateway'),
 					'data'    => [],
 				];
 			}
 
-			$order->update_meta_data('_unified_limit_exceeded', true);
-			$order->save();
+			return [
+				'success' => false,
+				'message' => __('No eligible payment provider available for this order', 'unified-payment-gateway'),
+				'data'    => [],
+			];
+		}
+
+		// What the customer actually bought, so the redemption page can show
+		// it back to them. Carried by the voucher only - request-payment
+		// neither wants nor keeps it.
+		$account       = $selected_account;
+		$data          = $payment_data;
+		$public_key    = $this->sandbox
+			? $account['sandbox_public_key']
+			: $account['live_public_key'];
+		$data['items'] = $this->unified_get_voucher_items($order);
+
+		$api_url = esc_url($this->base_url . '/api/voucher/send');
+
+		$response = wp_remote_post($api_url, [
+			'method'    => 'POST',
+			'timeout'   => 30,
+			'body'      => $data,
+			'headers'   => [
+				'Content-Type'  => 'application/x-www-form-urlencoded',
+				'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
+			],
+			'sslverify' => true,
+		]);
+
+		if (is_wp_error($response)) {
+			Unified_Payment_Gateway_Logger::error(
+				$log_prefix . ' Voucher request failed to reach the API',
+				[
+					'order_id'      => $order_id,
+					'account_title' => $account['title'] ?? null,
+					'error'         => $response->get_error_message(),
+				]
+			);
 
 			return [
 				'success' => false,
-				'message' => $last_error_data['message'] ?? __('Payment limit error.', 'unified-payment-gateway'),
+				'message' => __('We could not reach the voucher service. Please try again in a moment.', 'unified-payment-gateway'),
 				'data'    => [],
+			];
+		}
+
+		$code = (int) wp_remote_retrieve_response_code($response);
+		$body = json_decode(wp_remote_retrieve_body($response), true);
+		$body = is_array($body) ? $body : [];
+
+		$message = isset($body['message']) ? sanitize_text_field($body['message']) : '';
+
+		Unified_Payment_Gateway_Logger::info(
+			$log_prefix . ' Voucher API response received',
+			[
+				'order_id'   => $order_id,
+				'http_code'  => $code,
+				'status'     => $body['status'] ?? null,
+				'voucher_id' => $body['data']['voucher_id'] ?? null,
+				'reference'  => $body['data']['reference'] ?? null,
+			]
+		);
+
+		if (($body['status'] ?? '') === 'success') {
+			return [
+				'success' => true,
+				'message' => $message,
+				'data'    => isset($body['data']) && is_array($body['data']) ? $body['data'] : [],
 			];
 		}
 
 		return [
 			'success' => false,
-			'message' => $last_message ?: __('We could not email your voucher. Please try again in a moment.', 'unified-payment-gateway'),
+			'message' => $message ?: __('We could not email your voucher. Please try again in a moment.', 'unified-payment-gateway'),
 			'data'    => [],
 		];
 	}
@@ -1691,6 +1712,16 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			'source'   => 'woocommerce',
 		]);
 
+		$user_id = $order->get_customer_id();
+		$is_guest = empty($user_id) ? 1 : 0;
+		if ($is_guest === 1 && !empty($email)) {
+			$existing_user = get_user_by('email', $email);
+			if ($existing_user) {
+				$is_guest = 0;
+				$user_id = $existing_user->ID;
+			}
+		}
+
 		return [
 			'api_secret'       => $api_secret,
 			'api_public_key'   => $api_public_key,
@@ -1718,6 +1749,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			// Tells the application this order came from the unified plugin, which
 			// is what turns on its voucher pages (payment received, invoice).
 			'plugin_source'    => 'unified',
+			'is_guest'         => $is_guest,
+			'customer_user_id' => $user_id ? $user_id : 0,
 		];
 	}
 
