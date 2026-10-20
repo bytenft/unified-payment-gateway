@@ -466,6 +466,10 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			], 404);
 		}
 
+		$order_key = isset($_POST['order_key'])
+			? sanitize_text_field(wp_unslash($_POST['order_key']))
+			: '';
+
 		$security = isset($_POST['security'])
 			? sanitize_text_field(wp_unslash($_POST['security']))
 			: '';
@@ -473,16 +477,20 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		$log_prefix = "[Order #{$order_id}]";
 
 		// -------------------------
-		// NONCE CHECK
+		// SECURITY CHECK (NONCE OR ORDER KEY)
 		// -------------------------
-		if (empty($security) || !wp_verify_nonce($security, 'unified_payment')) {
+		$is_nonce_valid = !empty($security) && wp_verify_nonce($security, 'unified_payment');
+		$is_key_valid   = !empty($order_key) && hash_equals($order->get_order_key(), $order_key);
+
+		if (!$is_nonce_valid && !$is_key_valid) {
 
 			Unified_Payment_Gateway_Logger::info(
-				$log_prefix . ' CheckStatus | Invalid nonce'
+				$log_prefix . ' CheckStatus | Invalid security token / order key'
 			);
 
 			wp_send_json_error([
-				'message' => 'Nonce verification failed.'
+				'message'      => 'Security check failed.',
+				'stop_polling' => true
 			]);
 
 			wp_die();
@@ -492,6 +500,24 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// API CALL
 		// -------------------------
 		$payment_token = $order->get_meta('_unified_pay_id') ?: $order->get_meta('_unified_pay_id');
+
+		$public_key = $order->get_meta('_unified_public_key');
+		if (empty($public_key)) {
+			$accounts = get_option('woocommerce_unified_payment_gateway_accounts', []);
+			if (is_string($accounts)) {
+				$accounts = maybe_unserialize($accounts);
+			}
+			$settings = get_option('woocommerce_unified_settings', []);
+			$is_sandbox = ($settings['sandbox'] ?? 'no') === 'yes';
+			if (!empty($accounts) && is_array($accounts)) {
+				if (isset($accounts['live_public_key']) || isset($accounts['sandbox_public_key'])) {
+					$first_account = $accounts;
+				} else {
+					$first_account = reset($accounts);
+				}
+				$public_key = $is_sandbox ? ($first_account['sandbox_public_key'] ?? '') : ($first_account['live_public_key'] ?? '');
+			}
+		}
 
 		$response = wp_remote_post(
 			$this->get_api_url('/api/update-txn-status'),
@@ -503,7 +529,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				]),
 				'headers' => [
 					'Content-Type'  => 'application/json',
-					'Authorization' => 'Bearer ' . $security,
+					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
 				],
 				'timeout' => 15,
 			]
@@ -632,27 +658,15 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			? sanitize_text_field(wp_unslash($_POST['order_id']))
 			: 'unknown';
 
+		$order_key = isset($_POST['order_key'])
+			? sanitize_text_field(wp_unslash($_POST['order_key']))
+			: '';
+
 		$security = isset($_POST['security'])
 			? sanitize_text_field(wp_unslash($_POST['security']))
 			: '';
 
 		$log_prefix = "[Order #{$order_id}]";
-
-		// -------------------------
-		// NONCE CHECK
-		// -------------------------
-		if (empty($security) || !wp_verify_nonce($security, 'unified_payment')) {
-
-			Unified_Payment_Gateway_Logger::info(
-				$log_prefix . ' PopupClose | Invalid nonce'
-			);
-
-			wp_send_json_error([
-				'reload' => true
-			]);
-
-			wp_die();
-		}
 
 		// -------------------------
 		// ORDER CHECK
@@ -666,7 +680,30 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			);
 
 			wp_send_json_error([
-				'reload' => true
+				'reload'       => false,
+				'stop_polling' => true,
+				'message'      => 'Order not found.'
+			]);
+
+			wp_die();
+		}
+
+		// -------------------------
+		// SECURITY CHECK (NONCE OR ORDER KEY)
+		// -------------------------
+		$is_nonce_valid = !empty($security) && wp_verify_nonce($security, 'unified_payment');
+		$is_key_valid   = !empty($order_key) && hash_equals($order->get_order_key(), $order_key);
+
+		if (!$is_nonce_valid && !$is_key_valid) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' PopupClose | Invalid security token / order key'
+			);
+
+			wp_send_json_error([
+				'reload'       => false,
+				'stop_polling' => true,
+				'message'      => 'Security verification failed.'
 			]);
 
 			wp_die();
@@ -676,6 +713,24 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// API CALL
 		// -------------------------
 		$payment_token = $order->get_meta('_unified_pay_id') ?: $order->get_meta('_unified_pay_id');
+
+		$public_key = $order->get_meta('_unified_public_key');
+		if (empty($public_key)) {
+			$accounts = get_option('woocommerce_unified_payment_gateway_accounts', []);
+			if (is_string($accounts)) {
+				$accounts = maybe_unserialize($accounts);
+			}
+			$settings = get_option('woocommerce_unified_settings', []);
+			$is_sandbox = ($settings['sandbox'] ?? 'no') === 'yes';
+			if (!empty($accounts) && is_array($accounts)) {
+				if (isset($accounts['live_public_key']) || isset($accounts['sandbox_public_key'])) {
+					$first_account = $accounts;
+				} else {
+					$first_account = reset($accounts);
+				}
+				$public_key = $is_sandbox ? ($first_account['sandbox_public_key'] ?? '') : ($first_account['live_public_key'] ?? '');
+			}
+		}
 
 		$response = wp_remote_post(
 			$this->get_api_url('/api/update-txn-status'),
@@ -687,7 +742,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				]),
 				'headers' => [
 					'Content-Type'  => 'application/json',
-					'Authorization' => 'Bearer ' . $security,
+					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
 				],
 				'timeout' => 15,
 			]
