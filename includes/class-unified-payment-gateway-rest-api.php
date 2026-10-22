@@ -196,25 +196,9 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		 *
 		 * Recorded for Unified orders only, so DFinSell, ByteNFT and any other
 		 * gateway sharing this table keep their own rows.
-		 *
-		 * One row per order, and a cancellation reads its UUID from there, so a
-		 * report for a payment link the customer has already replaced is not
-		 * written over the live one - otherwise cancelling the order later would
-		 * cancel a link that is not the one the customer is paying.
 		 */
-		$is_superseded_pay_id = !empty($pay_id)
-			&& Unified_Payment_State_Engine::is_superseded_token($order, $pay_id);
-
-		if ($is_superseded_pay_id) {
-			Unified_Payment_Gateway_Logger::info(
-				"Unified | Order #{$order_id} | Payment link {$pay_id} is from a superseded attempt; live link kept.",
-				$log_context
-			);
-		}
-
 		if (
 			!empty($pay_id) &&
-			!$is_superseded_pay_id &&
 			$order->get_payment_method() === 'unified' &&
 			function_exists('unified_store_order_payment_link')
 		) {

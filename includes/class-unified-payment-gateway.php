@@ -5,7 +5,6 @@ if (!defined('ABSPATH')) {
 
 require_once plugin_dir_path(__FILE__) . 'config.php';
 require_once plugin_dir_path(__FILE__) . 'class-unified-payment-logger.php';
-require_once plugin_dir_path(__FILE__) . 'class-unified-payment-state-engine.php';
 
 class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 {
@@ -1576,15 +1575,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 		$reference = isset($voucher['reference']) ? sanitize_text_field($voucher['reference']) : '';
 		$to        = sanitize_email($voucher['customer_email'] ?? $order->get_billing_email());
-
-		/*
-		 * A fresh voucher is a fresh payment attempt. Checkout reuses the order
-		 * a failed attempt left behind, so the previous attempt's payment link
-		 * is still live at the application and still due to report its own
-		 * unpaid timeout. Marking the new attempt here is what keeps that
-		 * report from cancelling the payment now in progress.
-		 */
-		Unified_Payment_State_Engine::begin_attempt($order);
 
 		// Read by the order-received notice to say payment is still to come.
 		$order->update_meta_data('_unified_voucher_emailed_at', time());
