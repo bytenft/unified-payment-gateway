@@ -439,7 +439,7 @@ class Unified_Payment_State_Engine
             'pending' => ['cancelled','processing','success','failed'],
             'failed' => ['failed','success','processing','cancelled'],
             'cancelled' => ['success','failed'],
-            'expired' => ['failed','cancelled','success'],
+            'expired' => ['failed','cancelled','processing','success'],
         ];
 
         return in_array($to, $map[$from] ?? [], true);

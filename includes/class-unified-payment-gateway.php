@@ -1505,23 +1505,40 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 	 * submitted twice resends a single voucher instead of racing two. Numbering
 	 * the attempt is what separates a genuine retry from such a resend.
 	 *
+	 * When retrying after a failed, expired, or cancelled payment, we ensure a new
+	 * attempt reference is generated so a fresh voucher and payment link are created.
+	 *
 	 * @param WC_Order $order Order being paid.
 	 * @return string
 	 */
 	private function unified_voucher_reference($order) {
 
-		return $order->get_id() . '-' . ( $this->unified_failed_attempts($order) + 1 );
+		$last_voucher_attempt = 0;
+		$prev_ref = (string) $order->get_meta('_unified_voucher_reference', true);
+		if ($prev_ref !== '') {
+			if (preg_match('/-(\d+)$/', $prev_ref, $matches)) {
+				$last_voucher_attempt = (int) $matches[1];
+			} else {
+				$last_voucher_attempt = 1;
+			}
+		}
+
+		$timeline_attempts = $this->unified_failed_attempts($order);
+
+		$next_attempt = max($last_voucher_attempt, $timeline_attempts) + 1;
+
+		return $order->get_id() . '-' . $next_attempt;
 	}
 
 	/**
-	 * Failed payment attempts already made on this order.
+	 * Failed, expired, or cancelled payment attempts already made on this order.
 	 *
 	 * One per payment, never one per report: a failure arrives twice, once
 	 * from the webhook and once when the customer returns to the store, and
 	 * the timeline records both under the one payment token. Counting distinct
 	 * tokens is therefore counting attempts.
 	 *
-	 * This only numbers the next voucher. Whether an attempt is allowed at all
+	 * This numbers the next voucher. Whether an attempt is allowed at all
 	 * is the application's decision, taken against its own record of the order.
 	 *
 	 * @param WC_Order $order Order being paid.
@@ -1540,14 +1557,20 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 		foreach ($timeline as $event) {
 
-			if (!is_array($event) || ($event['type'] ?? '') !== 'failed') {
+			if (!is_array($event)) {
+				continue;
+			}
+
+			$type = strtolower(trim((string) ($event['type'] ?? '')));
+
+			if (!in_array($type, ['failed', 'expired', 'cancelled'], true)) {
 				continue;
 			}
 
 			$token = trim((string) ($event['payment_token'] ?? ''));
 
 			if ($token === '') {
-				// A failure reported without a token is still one attempt.
+				// A failure/expiry reported without a token is still one attempt.
 				$untokened++;
 				continue;
 			}
@@ -1659,6 +1682,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		if ($reference !== '') {
 			$order->update_meta_data('_unified_voucher_reference', $reference);
 		}
+
+		$order->update_meta_data('_unified_state', 'pending');
 
 		$order->add_order_note(
 			$reference !== ''
