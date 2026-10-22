@@ -1423,6 +1423,18 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			: $account['live_public_key'];
 		$data['items'] = $this->unified_get_voucher_items($order);
 
+		/*
+		 * Which attempt this voucher is for. Without it the application keys
+		 * the voucher on the order number alone, so a retry of the same order
+		 * is treated as the merchant resending the first voucher and hands the
+		 * customer back the payment page of the attempt that already failed.
+		 *
+		 * meta_data.order_id is deliberately left as the plain order number:
+		 * that is what the application counts failed attempts against, and it
+		 * must stay the same across attempts for the limit to work.
+		 */
+		$data['reference'] = $this->unified_voucher_reference($order);
+
 		$api_url = esc_url($this->base_url . '/api/voucher/send');
 
 		$response = wp_remote_post($api_url, [
@@ -1483,6 +1495,67 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			'message' => $message ?: __('We could not email your voucher. Please try again in a moment.', 'unified-payment-gateway'),
 			'data'    => [],
 		];
+	}
+
+	/**
+	 * Voucher reference for the attempt about to be made.
+	 *
+	 * The application keeps one open voucher per (merchant, mode, reference)
+	 * and hands the existing one back when that key repeats, so a checkout
+	 * submitted twice resends a single voucher instead of racing two. Numbering
+	 * the attempt is what separates a genuine retry from such a resend.
+	 *
+	 * @param WC_Order $order Order being paid.
+	 * @return string
+	 */
+	private function unified_voucher_reference($order) {
+
+		return $order->get_id() . '-' . ( $this->unified_failed_attempts($order) + 1 );
+	}
+
+	/**
+	 * Failed payment attempts already made on this order.
+	 *
+	 * One per payment, never one per report: a failure arrives twice, once
+	 * from the webhook and once when the customer returns to the store, and
+	 * the timeline records both under the one payment token. Counting distinct
+	 * tokens is therefore counting attempts.
+	 *
+	 * This only numbers the next voucher. Whether an attempt is allowed at all
+	 * is the application's decision, taken against its own record of the order.
+	 *
+	 * @param WC_Order $order Order being paid.
+	 * @return int
+	 */
+	private function unified_failed_attempts($order) {
+
+		$timeline = $order->get_meta('_unified_timeline', true);
+
+		if (!is_array($timeline)) {
+			return 0;
+		}
+
+		$tokens    = [];
+		$untokened = 0;
+
+		foreach ($timeline as $event) {
+
+			if (!is_array($event) || ($event['type'] ?? '') !== 'failed') {
+				continue;
+			}
+
+			$token = trim((string) ($event['payment_token'] ?? ''));
+
+			if ($token === '') {
+				// A failure reported without a token is still one attempt.
+				$untokened++;
+				continue;
+			}
+
+			$tokens[$token] = true;
+		}
+
+		return count($tokens) + $untokened;
 	}
 
 	/**
