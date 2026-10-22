@@ -1983,12 +1983,48 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		// STEP 7: NO ACCOUNTS
 		// =====================================================
 		if (empty($accounts)) {
+			$submitted_gateway = isset($_POST['payment_method'])
+				? wc_clean(wp_unslash($_POST['payment_method']))
+				: '';
+
+			if (
+				$submitted_gateway !== $gateway_id
+				&& $is_blocks
+				&& function_exists('rest_get_server')
+			) {
+				$rest_server  = rest_get_server();
+				$rest_request = is_object($rest_server) && method_exists($rest_server, 'get_current_request')
+					? $rest_server->get_current_request()
+					: null;
+				if (is_object($rest_request) && method_exists($rest_request, 'get_param')) {
+					$submitted_gateway = wc_clean((string) $rest_request->get_param('payment_method'));
+				}
+			}
+
+			if (
+				$submitted_gateway === $gateway_id
+				&& isset($available_gateways[$gateway_id])
+			) {
+				Unified_Payment_Gateway_Logger::info(
+					"Unified Gateway Decision",
+					[
+						'result' => 'RETAINED_FOR_SUBMISSION',
+						'reason' => 'No active merchant accounts',
+						'items'  => $items,
+						'total'  => $amount,
+						'flow'   => $flow
+					]
+				);
+
+				// Let the payment handler return its actionable no-active-account error.
+				return $available_gateways;
+			}
 
 			Unified_Payment_Gateway_Logger::info(
 				"Unified Gateway Decision",
 				[
 					'result' => 'HIDDEN',
-					'reason' => 'No merchant accounts configured',
+					'reason' => 'No active merchant accounts',
 					'items'  => $items,
 					'total'  => $amount,
 					'flow'   => $flow
