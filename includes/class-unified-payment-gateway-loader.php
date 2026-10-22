@@ -96,11 +96,69 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 						
 						if ( $awaiting_order && ( $awaiting_order->get_billing_email() !== $posted_email || $awaiting_order->get_billing_phone() !== $posted_phone ) ) {
 							WC()->session->set( 'order_awaiting_payment', null );
+						} else {
+							$this->unified_reopen_retryable_order( $awaiting_order_id );
 						}
 					}
 				}
 			}
 		});
+	}
+
+	/**
+	 * Put a retryable order back in play so a retry keeps its order number.
+	 *
+	 * WooCommerce resumes 'order_awaiting_payment' only while the order is
+	 * still pending or failed. A cancelled one is abandoned and the retry is
+	 * given a brand new order number, which is how the same customer walks away
+	 * with orders #1001, #1002, #1003 for one purchase - and why the
+	 * application, which counts failed attempts against a WooCommerce order id,
+	 * sees a first attempt every time and never reaches the merchant's limit.
+	 *
+	 * Re-opening keeps order #1001 across attempts 1..N, so the attempt count
+	 * accumulates where the merchant configured it and a later success
+	 * finalizes that same order.
+	 *
+	 * Only this gateway's own unpaid orders qualify: anything already paid, or
+	 * belonging to another gateway, is left exactly as it is.
+	 *
+	 * @param int $order_id Order the session is still pointing at.
+	 * @return void
+	 */
+	private function unified_reopen_retryable_order( $order_id ) {
+
+		$order = $order_id ? wc_get_order( $order_id ) : false;
+
+		if ( ! $order instanceof WC_Order || $order->get_payment_method() !== 'unified' ) {
+			return;
+		}
+
+		// Pending and failed are resumed by WooCommerce itself; nothing to do.
+		if ( ! $order->has_status( [ 'cancelled', 'on-hold' ] ) ) {
+			return;
+		}
+
+		/*
+		 * Never reopen a payment that went through. A paid order is finished,
+		 * and reopening it would put it back in the queue for another one.
+		 */
+		if (
+			$order->get_date_paid( 'edit' ) ||
+			$order->get_meta( '_unified_payment_success' ) === 'yes' ||
+			Unified_Payment_State_Engine::resolve_final_state( $order ) === 'success'
+		) {
+			return;
+		}
+
+		$order->update_status(
+			'pending',
+			__( 'Reopened for a new Voucher Pay payment attempt.', 'unified-payment-gateway' )
+		);
+
+		Unified_Payment_Gateway_Logger::info(
+			'[Order #' . $order->get_id() . '] Reopened for a new payment attempt; order number preserved.',
+			[ 'order_id' => $order->get_id() ]
+		);
 	}
 
 	/**
@@ -230,6 +288,16 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				if ( $awaiting_order && ( $awaiting_order->get_billing_email() !== $posted_email || $awaiting_order->get_billing_phone() !== $posted_phone ) ) {
 					WC()->session->set( 'order_awaiting_payment', null );
 					WC()->session->set( 'store_api_draft_order', null );
+				} else {
+					/*
+					 * Same customer retrying: keep their order number so the
+					 * application's per-order attempt count keeps counting.
+					 * create_order() below reads 'order_awaiting_payment', so
+					 * the pointer is moved there when the draft order is the
+					 * only one the session still holds.
+					 */
+					WC()->session->set( 'order_awaiting_payment', $awaiting_order_id );
+					$this->unified_reopen_retryable_order( $awaiting_order_id );
 				}
 			}
 		}
