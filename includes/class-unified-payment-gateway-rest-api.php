@@ -65,23 +65,30 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 
 	private function unified_verify_api_key($api_key)
 	{
-	    $api_key = sanitize_text_field($api_key);
+	    $api_key = trim(trim(sanitize_text_field($api_key)), '"\'');
 
 	    // Retrieve plugin options
 	    $accounts_data = get_option('woocommerce_unified_payment_gateway_accounts');
-	    $general_settings = get_option('woocommerce_unified_settings');
+	    if (empty($accounts_data)) {
+	        $general_settings = get_option('woocommerce_unified_settings');
+	        if (!empty($general_settings['accounts'])) {
+	            $accounts_data = maybe_unserialize($general_settings['accounts']);
+	        }
+	    }
 
 	    if (empty($accounts_data)) {
 	        Unified_Payment_Gateway_Logger::warning('No account data found', ['source' => 'unified-payment-gateway']);
 	        return false;
 	    }
 
+	    if (is_string($accounts_data)) {
+	        $accounts_data = maybe_unserialize($accounts_data);
+	    }
+
 	    // If it's a single account array, wrap it inside an array for consistency
 	    if (isset($accounts_data['live_public_key']) || isset($accounts_data['sandbox_public_key'])) {
 	        $accounts_data = [ $accounts_data ];
 	    }
-
-	    $sandbox = isset($general_settings['sandbox']) && $general_settings['sandbox'] === 'yes';
 
 	    foreach ($accounts_data as $account_id => $account) {
 	        // Ensure valid array
@@ -94,21 +101,22 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 	            continue;
 	        }
 
-	        $public_key = $sandbox
-	            ? sanitize_text_field($account['sandbox_public_key'] ?? '')
-	            : sanitize_text_field($account['live_public_key'] ?? '');
+	        $keys_to_check = [
+	            sanitize_text_field($account['live_public_key'] ?? ''),
+	            sanitize_text_field($account['live_secret_key'] ?? ''),
+	            sanitize_text_field($account['sandbox_public_key'] ?? ''),
+	            sanitize_text_field($account['sandbox_secret_key'] ?? ''),
+	        ];
 
-	        Unified_Payment_Gateway_Logger::info('Checking public key :: ' . $public_key, [
-	            'source' => 'unified-payment-gateway',
-	            'sandbox' => $sandbox,
-	        ]);
-
-	        if (!empty($public_key) && hash_equals($public_key, $api_key)) {
-	            Unified_Payment_Gateway_Logger::info('Keys matched successfully', [
-	                'source' => 'unified-payment-gateway',
-	                'account_id' => $account_id,
-	            ]);
-	            return true;
+	        foreach ($keys_to_check as $key) {
+	            $clean_key = trim(trim($key), '"\'');
+	            if (!empty($clean_key) && hash_equals($clean_key, $api_key)) {
+	                Unified_Payment_Gateway_Logger::info('Keys matched successfully', [
+	                    'source' => 'unified-payment-gateway',
+	                    'account_id' => $account_id,
+	                ]);
+	                return true;
+	            }
 	        }
 	    }
 
@@ -130,12 +138,12 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		$data = isset($params['api_data']) ? $params['api_data'] : $params;
 
 		$order_id         = intval($data['order_id'] ?? 0);
-		$api_order_status = sanitize_text_field($data['order_status'] ?? '');
-		$pay_id           = sanitize_text_field($data['pay_id'] ?? '');
-		$api_key_raw      = $data['nonce'] ?? '';
+		$api_order_status = trim(trim(sanitize_text_field($data['order_status'] ?? '')), '"\'');
+		$pay_id           = trim(trim(sanitize_text_field($data['pay_id'] ?? '')), '"\'');
+		$api_key_raw      = trim(trim($data['nonce'] ?? ''), '"\'');
 
 		Unified_Payment_Gateway_Logger::info(
-			"Unified API HIT | Order #{$order_id} | Status: {$api_order_status} | Pay ID: {$pay_id}",
+			"Unified API HIT | Method: {$method} | Order #{$order_id} | Status: {$api_order_status} | Pay ID: {$pay_id}",
 			$log_context
 		);
 
@@ -163,17 +171,43 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		// -------------------------
 		if ($method === 'POST') {
 
-			$decoded_nonce = base64_decode($api_key_raw);
+			$decoded_nonce = base64_decode($api_key_raw, true);
+			$key_to_verify = ($decoded_nonce !== false && !empty($decoded_nonce)) ? $decoded_nonce : $api_key_raw;
 
 			if (
 				empty($api_key_raw) ||
-				!$this->unified_verify_api_key($decoded_nonce)
+				(!$this->unified_verify_api_key($key_to_verify) && !$this->unified_verify_api_key($api_key_raw))
 			) {
 				return new WP_REST_Response([
 					'success'    => false,
 					'error_code' => 'INVALID_API_KEY'
 				], 401);
 			}
+		}
+
+		// -------------------------
+		// 2b. PAYMENT LINK RECORD
+		// -------------------------
+		/*
+		 * Checkout creates no payment link. The voucher flow creates the real
+		 * one when the customer opens the button in their email, and this report
+		 * - the return to the store, or the webhook behind it - is where the
+		 * store is first told which payment link the order has.
+		 *
+		 * Recorded for Unified orders only, so DFinSell, ByteNFT and any other
+		 * gateway sharing this table keep their own rows.
+		 */
+		if (
+			!empty($pay_id) &&
+			$order->get_payment_method() === 'unified' &&
+			function_exists('unified_store_order_payment_link')
+		) {
+			unified_store_order_payment_link($order, [
+				'uuid'           => $pay_id,
+				'payment_link'   => $data['payment_link'] ?? '',
+				'customer_email' => $data['customer_email'] ?? '',
+				'amount'         => $data['amount'] ?? '',
+			]);
 		}
 
 		// -------------------------
@@ -192,7 +226,7 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		// -------------------------
 		if (!empty($api_order_status)) {
 
-			$result = UNIFIED_PAYMENT_ENGINE::handle_event(
+			$result = Unified_Payment_State_Engine::handle_event(
 				$order_id,
 				$event_type,
 				[
@@ -218,7 +252,7 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		 * Always resolve from ENGINE + WC state,
 		 * not raw API response.
 		 */
-		$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state(
+		$state = Unified_Payment_State_Engine::resolve_final_state(
 			$order,
 			$api_order_status
 		);
@@ -228,7 +262,7 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 		// -------------------------
 		// 6. SUCCESS OVERRIDE (IMPORTANT FIX)
 		// -------------------------
-		if (in_array($wc_status, ['processing', 'completed'], true) && $order->get_meta('_unified_payment_success') === 'yes') {
+		if ($wc_status === 'processing' || $wc_status === 'completed') {
 			$state = 'success';
 		}
 
@@ -267,7 +301,7 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 
 			$redirect = $order->get_checkout_order_received_url();
 
-		} elseif (in_array($state, ['failed', 'cancelled'], true)) {
+		} elseif (in_array($state, ['failed', 'cancelled', 'expired'], true)) {
 
 			$redirect = wc_get_checkout_url();
 		}
@@ -307,10 +341,8 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 			WC()->session->set('order_awaiting_payment', $order->get_id());
 		}
 
-		if (in_array($target_status, ['failed', 'cancelled'])) {
-			if($target_status !== 'failed') {
-				wc_add_notice('Payment was not completed. Please try again.', 'error');
-			}
+		if (in_array($target_status, ['failed', 'cancelled', 'expired'])) {
+			wc_add_notice('Payment was not completed. Please try again.', 'error');
 			wp_safe_redirect(wc_get_checkout_url());
 		} else {
 			// Send user to the 'Thank You' page
@@ -324,7 +356,7 @@ class UNIFIED_PAYMENT_GATEWAY_REST_API
 	 */
 	private function unified_map_status($api_status, $success_target) 
 	{
-		switch ($api_status) {
+		switch (strtolower((string)$api_status)) {
 			case 'completed': return $success_target;
 			case 'failed':    return 'failed';
 			case 'expired':

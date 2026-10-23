@@ -3,8 +3,11 @@ if ( ! defined( 'ABSPATH' ) ) exit; // Exit if accessed directly
 
 function unified_migrate_old_settings()
 {
-	// First, check if beta option exists
+	// Check if option exists under new or old key
 	$beta_accounts = get_option('woocommerce_unified_payment_gateway_accounts');
+	if (!$beta_accounts) {
+		$beta_accounts = get_option('woocommerce_unified_payment_gateway_accounts');
+	}
 
 	if ($beta_accounts) {
 		$beta_accounts = maybe_unserialize($beta_accounts);
@@ -27,8 +30,11 @@ function unified_migrate_old_settings()
 		}
 	}
 
-	// Fallback to legacy `woocommerce_unified_settings`
+	// Fallback to legacy `woocommerce_unified_settings` or `woocommerce_unified_settings`
 	$old_settings = get_option('woocommerce_unified_settings');
+	if (!$old_settings) {
+		$old_settings = get_option('woocommerce_unified_settings');
+	}
 	$old_settings = maybe_unserialize($old_settings);
 	if (!$old_settings || !is_array($old_settings)) {
 		return; // Nothing to migrate
@@ -92,6 +98,7 @@ function unified_on_plugin_activate() {
 		unified_migrate_old_settings();
 	}
 
+	// Activate cron
 	if (class_exists('UNIFIED_PAYMENT_GATEWAY_Loader')) {
 		UNIFIED_PAYMENT_GATEWAY_Loader::get_instance()->activate_cron_job();
 		UNIFIED_PAYMENT_GATEWAY_Loader::get_instance()->unified_send_plugin_status(1, 0);

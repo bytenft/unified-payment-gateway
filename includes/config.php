@@ -7,7 +7,7 @@ if (!defined('UNIFIED_PROTOCOL')) {
 }
 
 if (!defined('UNIFIED_HOST')) {
-    define('UNIFIED_HOST', 'rt.app');
+    define('UNIFIED_HOST', 'pay.bytenft.xyz');
 }
 
 if (!defined('UNIFIED_BASE_URL')) {
@@ -15,5 +15,6 @@ if (!defined('UNIFIED_BASE_URL')) {
 }
 
 if (!defined('UNIFIED_PLUGIN_VERSION')) {
-    define('UNIFIED_PLUGIN_VERSION', '1.0.2');
+    define('UNIFIED_PLUGIN_VERSION', '1.0.3');
 }
+

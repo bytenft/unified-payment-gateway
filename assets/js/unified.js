@@ -7,30 +7,32 @@
 
     window.UnifiedCheckoutInitialized = true;
 
-    const UnifiedCheckout = {
+    const CHECK_ICON =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M5 12.5l4.5 4.5L19 7.5"></path>' +
+        '</svg>';
 
-        /* =========================================================
-         * CONFIG
-         * ========================================================= */
+    const SHIELD_ICON =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3z"></path>' +
+        '</svg>';
+
+    const EXTERNAL_ICON =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M14 5h5v5"></path>' +
+        '<path d="M19 5l-9 9"></path>' +
+        '<path d="M18 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4"></path>' +
+        '</svg>';
+
+    const UnifiedCheckout = {
 
         PAYMENT_METHOD: unified_params.payment_method,
 
-        /* =========================================================
-         * BANK-GRADE STATE MACHINE
-         * ========================================================= */
-
         state: {
-            status: 'idle', // idle | validating | popup | processing | done
             submitting: false,
-            popup: null,
-            popupInterval: null,
             orderId: null,
             button: null,
-            buttonText: '',
-            requestInFlightClassic: false,
-            requestInFlightBlock: false,
-            responseHandled: false,
-            finalSuccess: false
+            buttonText: ''
         },
 
         /* =========================================================
@@ -38,48 +40,14 @@
          * ========================================================= */
 
         init: function () {
-            const self = this;
 
             this.bindClassicCheckout();
+
             this.bindBlockCheckout();
+
             this.bindInputSanitization();
 
-            // Re-bind events if layout structures refresh via multi-step AJAX changes
-            $(document.body).on('updated_checkout updated_shipping_method fragments_refreshed fragments_loaded', function () {
-                self.bindClassicCheckout();
-            });
-
-            console.log('[Unified] bank-grade initialized');
-        },
-
-        setStatus: function (status) {
-            this.state.status = status;
-        },
-
-        canProceed: function (type) {
-            if (type === 'Classic') {
-                return !this.state.requestInFlightClassic;
-            }
-            if (type === 'Block') {
-                return !this.state.requestInFlightBlock;
-            }
-            return true;
-        },
-
-        releaseLock: function (type) {
-            if (!type) {
-                this.state.requestInFlightClassic = false;
-                this.state.requestInFlightBlock = false;
-                return;
-            }
-
-            if (type === 'Classic') {
-                this.state.requestInFlightClassic = false;
-            }
-
-            if (type === 'Block') {
-                this.state.requestInFlightBlock = false;
-            }
+            console.log('[Unified] initialized');
         },
 
         /* =========================================================
@@ -87,109 +55,77 @@
          * ========================================================= */
 
         bindClassicCheckout: function () {
+
             const self = this;
 
-            $('form.checkout, form#wcf-embed-checkout-form, form.wcf-embed-checkout-form-steps')
+            $('form.checkout')
                 .off('checkout_place_order_' + self.PAYMENT_METHOD)
-                .on('checkout_place_order_' + self.PAYMENT_METHOD, function () {
+                .on(
+                    'checkout_place_order_' + self.PAYMENT_METHOD,
+                    function () {
 
-                    const $form = $(this);
+                        console.log('[Unified] classic checkout');
 
-                    if (!self.canProceed('Classic')) return false;
-                    if (self.state.requestInFlightClassic) return false;
+                        const $form = $(this);
 
-                    self.state.requestInFlightClassic = true;
+                        if (self.state.submitting) {
+                            return false;
+                        }
 
-                    self.setStatus('validating');
-                    self.clearCheckoutErrors();
+                        self.clearCheckoutErrors();
 
-                    const requiredError = self.validateRequiredFields($form);
-                    if (requiredError) {
-                        self.releaseLock('Classic');
-                        self.setStatus('idle');
-                        self.reset();
-                        self.showCheckoutError(requiredError.message, requiredError.fields);
+                        // Start custom flow
+                        self.handleClassicCheckout($form);
+
+                        // STOP WooCommerce default flow
                         return false;
                     }
-
-                    const validationError = self.validateAll($form);
-                    if (validationError) {
-                        self.releaseLock('Classic');
-                        self.setStatus('idle');
-                        self.reset();
-                        self.showCheckoutError(
-                            'Please correct the following errors:',
-                            validationError
-                        );
-                        return;
-                    }
-
-                    self.setStatus('popup');
-
-                   const popup = self.openPopupImmediately();
-
-                    if (!popup) {
-                        self.releaseLock('Classic');
-                        self.setStatus('idle');
-                        return false;
-                    }
-
-                    // 3. NOW move to processing
-                    self.setStatus('processing');
-
-                    // 4. Start AJAX AFTER popup exists
-                    self.handleClassicCheckout($form);
-                    return false;
-                });
-        },
-
-        buildCheckoutPayload: function () {
-            const $form = $('form.checkout, form.wc-block-checkout__form, #order_review').first();
-
-            let data = $form.serialize();
-
-            // =====================================================
-            // CRITICAL WOOCOMMERCE STATE ENFORCEMENT
-            // =====================================================
-
-            const shipToDifferent = $(
-                '#ship-to-different-address-checkbox, input[name="ship_to_different_address"]'
-            ).is(':checked') ? 1 : 0;
-
-            data += '&ship_to_different_address=' + shipToDifferent;
-
-            // Optional safety: force billing/shipping sync flag consistency
-            if (!shipToDifferent) {
-                data += '&wfacp_billing_same_as_shipping=1';
-            }
-
-            return data;
+                );
         },
 
         handleClassicCheckout: function ($form) {
+
             const self = this;
 
-            self.state.button = $('body').find('button[name="woocommerce_checkout_place_order"], #wcf-order-place-btn').first();
+            self.state.submitting = true;
+
+            self.state.button = $form
+                .find('button[name="woocommerce_checkout_place_order"]');
+
             self.state.buttonText = self.state.button.text();
 
-            self.state.button.prop('disabled', true).addClass('loading').text('Processing...');
-
-            // Form payload compilation handles scattered form fields elegantly
-            const dataPayload = self.buildCheckoutPayload();
+            self.state.button
+                .prop('disabled', true)
+                .addClass('loading')
+                .text('Processing...');
 
             $.ajax({
+
                 type: 'POST',
+
                 url: wc_checkout_params.checkout_url,
-                data: dataPayload,
+
+                data: $form.serialize(),
+
                 dataType: 'json',
+
                 success: function (response) {
-                    self.state.requestInFlightClassic = false;
+
+                    console.log('[Unified] classic response', response);
+
                     self.handleResponse(response);
                 },
-                error: function (xhr) {
-                    self.state.requestInFlightClassic = false;
-                    console.log('[Unified] checkout network error:', xhr.responseText);
-                    self.failSafe('There was an error processing your order.');
+
+                error: function (xhr, status, error) {
+
+                    console.log('[Unified] classic ajax error');
+                    console.log(xhr.responseText);
+
+                    self.showCheckoutError(
+                        'There was an error processing your order.'
+                    );
+
+                    self.reset();
                 }
             });
         },
@@ -199,106 +135,138 @@
          * ========================================================= */
 
         bindBlockCheckout: function () {
+
             const self = this;
 
-            document.addEventListener('click', function (e) {
-                const btn = e.target.closest('.wc-block-components-checkout-place-order-button');
-                if (!btn) return;
+            document.addEventListener(
+                'click',
+                function (e) {
 
-                const $form = $('form.wc-block-checkout__form');
-                if (!$form.length) return;
-
-                const selected = $form.find(
-                    'input[name="radio-control-wc-payment-method-options"]:checked'
-                ).val();
-
-                if (selected !== self.PAYMENT_METHOD) return;
-
-                e.preventDefault();
-                e.stopImmediatePropagation();
-
-                if (!self.canProceed('Block')) return;
-                if (self.state.requestInFlightBlock) return;
-
-                self.state.requestInFlightBlock = true;
-
-                self.setStatus('validating');
-                self.clearCheckoutErrors();
-
-                const requiredError = self.validateRequiredFields($form);
-                if (requiredError) {
-                    self.releaseLock('Block');
-                    self.setStatus('idle');
-                    self.reset();
-                    self.showCheckoutError(requiredError.message, requiredError.fields);
-                    return;
-                }
-
-                const validationError = self.validateAll($form);
-                if (validationError) {
-                    self.releaseLock('Block');
-                    self.setStatus('idle');
-                    self.reset();
-                    self.showCheckoutError(
-                        'Please correct the following errors:',
-                        validationError
+                    const btn = e.target.closest(
+                        '.wc-block-components-checkout-place-order-button'
                     );
-                    return;
-                }
 
-                self.setStatus('popup');
-                const popup = self.openPopupImmediately();
+                    if (!btn) {
+                        return;
+                    }
 
-                if (!popup) {
-                    self.releaseLock('Block');
-                    self.setStatus('idle');
-                    return;
-                }
+                    const $form = $('form.wc-block-checkout__form');
 
-                self.setStatus('processing');
-                self.handleBlockCheckout($form);
-            }, true);
+                    if (!$form.length) {
+                        return;
+                    }
 
-            // Prevent native block context from bypassing validation filters
-            document.addEventListener('submit', function (e) {
-                const form = e.target;
-                if (!form.classList.contains('wc-block-checkout__form')) return;
+                    const selected = $form
+                        .find(
+                            'input[name="radio-control-wc-payment-method-options"]:checked'
+                        )
+                        .val();
 
-                const selected = form.querySelector(
-                    'input[name="radio-control-wc-payment-method-options"]:checked'
-                )?.value;
+                    if (selected !== self.PAYMENT_METHOD) {
+                        return;
+                    }
 
-                if (selected !== self.PAYMENT_METHOD) return;
+                    console.log('[Unified] block checkout');
 
-                e.preventDefault();
-                e.stopImmediatePropagation();
-            }, true);
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+
+                    if (self.state.submitting) {
+                        return;
+                    }
+
+                    self.clearCheckoutErrors();
+
+                    self.handleBlockCheckout($form);
+
+                },
+                true
+            );
+
+            // Prevent Woo block native submit
+            document.addEventListener(
+                'submit',
+                function (e) {
+
+                    const form = e.target;
+
+                    if (!form.classList.contains('wc-block-checkout__form')) {
+                        return;
+                    }
+
+                    const selected = form.querySelector(
+                        'input[name="radio-control-wc-payment-method-options"]:checked'
+                    )?.value;
+
+                    if (selected !== self.PAYMENT_METHOD) {
+                        return;
+                    }
+
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+
+                },
+                true
+            );
         },
 
         handleBlockCheckout: function ($form) {
+
             const self = this;
 
-            self.state.button = $('.wc-block-components-checkout-place-order-button');
+            self.state.submitting = true;
+
+            self.state.button = $(
+                '.wc-block-components-checkout-place-order-button'
+            );
+
             self.state.buttonText = self.state.button.text();
 
-            self.state.button.prop('disabled', true).addClass('loading').text('Processing...');
+            self.state.button
+                .prop('disabled', true)
+                .addClass('loading')
+                .text('Processing...');
 
-            let data = self.buildCheckoutPayload();
+            let data = $form.serialize();
+
+            // Extract email and phone directly to avoid Store API sync race conditions
+            let emailField = document.querySelector('input[type="email"], #email');
+            if (emailField && emailField.value) {
+                data += '&billing_email=' + encodeURIComponent(emailField.value);
+            }
+            let phoneField = document.querySelector('input[type="tel"], #phone, input[name="phone"]');
+            if (phoneField && phoneField.value) {
+                data += '&billing_phone=' + encodeURIComponent(phoneField.value);
+            }
+
             data += '&action=unified_block_gateway_process';
             data += '&nonce=' + encodeURIComponent(unified_params.unified_nonce);
 
             $.ajax({
+
                 type: 'POST',
+
                 url: unified_params.ajax_url,
+
                 data: data,
+
                 success: function (response) {
-                    self.state.requestInFlightBlock = false;
+
+                    console.log('[Unified] block response', response);
+
                     self.handleResponse(response);
                 },
-                error: function (xhr) {
-                    self.state.requestInFlightBlock = false;
-                    console.log('[Unified] block checkout error:', xhr.responseText);
-                    self.failSafe('There was an error processing your order.');
+
+                error: function (xhr, status, error) {
+
+                    console.log('[Unified] block ajax error');
+                    console.log(xhr.responseText);
+
+                    self.showCheckoutError(
+                        'There was an error processing your order.'
+                    );
+
+                    self.reset();
                 }
             });
         },
@@ -308,569 +276,360 @@
          * ========================================================= */
 
         handleResponse: function (response) {
+
             const self = this;
 
-            if (self.state.responseHandled) return;
-
             try {
+
                 if (typeof response === 'string') {
-                    response = JSON.parse(response);
+
+                    try {
+                        response = JSON.parse(response);
+                    } catch (e) {
+
+                        console.log('[Unified] invalid json');
+
+                        self.showCheckoutError('Invalid server response.');
+
+                        self.reset();
+
+                        return;
+                    }
                 }
 
                 console.log('[Unified] parsed response', response);
 
                 const success =
                     response?.result === 'success' ||
-                    response?.success === true ||
-                    response?.data?.payment_status === 'success' ||
-                    response?.data?.payment_status === 'paid';
+                    response?.success === true;
 
-                const redirect = response?.redirect || response?.data?.redirect;
-                const orderId = response?.order_id || response?.data?.order_id;
+                const redirect =
+                    response.redirect ||
+                    response.data?.redirect ||
+                    null;
 
-                self.state.orderId = orderId;
+                const errorMessage =
+                    response?.message ||
+                    response?.messages ||
+                    response?.data?.message ||
+                    response?.data?.messages ||
+                    response?.data?.error ||
+                    response?.error ||
+                    'Your order could not be placed. Please try again.';
 
+                self.state.orderId =
+                    response.order_id ||
+                    response.data?.order_id ||
+                    null;
+
+                // =====================================================
+                // FAILURE
+                // =====================================================
                 if (!success) {
-                    self.failSafe(response?.message || response?.data?.message || 'Payment failed. Please try again.');
+
+                    console.log('[Unified] showing failed message:', errorMessage);
+
+                    setTimeout(function () {
+
+                        self.showCheckoutError(errorMessage);
+
+                        // force scroll after Woo rerender
+                        const $notice = $('.woocommerce-notices-wrapper');
+
+                        if ($notice.length) {
+                            $('html, body').animate({
+                                scrollTop: $notice.offset().top - 80
+                            }, 300);
+                        }
+
+                    }, 50);
+
+                    setTimeout(function () {
+                        self.reset();
+                    }, 400);
+
+                    return;
+                }
+
+                // =====================================================
+                // SUCCESS — the voucher email is on its way
+                // =====================================================
+                const orderReceived = response.data?.order_received;
+
+                if (orderReceived) {
+
+                    self.showOrderReceived(orderReceived);
+
+                    self.reset();
+
                     return;
                 }
 
                 if (redirect && typeof redirect === 'string' && redirect.length > 5) {
-                    self.state.responseHandled = true;
 
-                    if (self.state.popup && !self.state.popup.closed) {
-                        try {
-                            // FIX: Use navigateWithoutReferrer instead of
-                            // directly setting location.href, which would
-                            // send the WP checkout URL as Referer header
-                            // to the Laravel payment page.
-                            self.navigateWithoutReferrer(self.state.popup, redirect);
+                    window.location.href = redirect;
 
-                        } catch (e) {
+                    self.reset(true);
 
-                            // Safari fallback — re-open popup and use same method
-                            if (!self.state.popup || self.state.popup.closed) {
-                                self.state.popup = window.open(
-                                    '',
-                                    '_blank'
-                                );
-                            }
-
-                            self.navigateWithoutReferrer(self.state.popup, redirect);
-                        }
-                        self.trackPopupClose();
-                    } else {
-                        window.location.href = redirect;
-                        self.finish();
-                    }
                     return;
                 }
 
-                self.failSafe('Missing redirect URL.');
+                self.showCheckoutError('Your order could not be placed. Please try again.');
 
-            } catch (e) {
-                console.log('[Unified] response processing exception', e);
-                self.failSafe('Unexpected checkout error.');
-            }
-        },
-
-        /* =========================================================
-         * FAIL SAFE & STATE TERMINATION
-         * ========================================================= */
-
-        failSafe: function (message) {
-            this.releaseLock();
-            this.cleanupPopup();
-            this.showCheckoutError(message);
-            this.reset(false); // IMPORTANT: restore button immediately
-            this.finish();
-        },
-
-        finish: function () {
-
-            if (this.state.popupInterval) {
-                clearInterval(this.state.popupInterval);
-                this.state.popupInterval = null;
-            }
-
-            this.setStatus('done');
-            this.reset(true);
-
-            this.state.responseHandled = false;
-            this.state.requestInFlightClassic = false;
-            this.state.requestInFlightBlock = false;
-            this.state.finalSuccess = false;
-
-            setTimeout(() => {
-                this.setStatus('idle');
-            }, 500);
-        },
-
-        /* =========================================================
-         * POPUP HANDLERS
-         * ========================================================= */
-
-        openPopupImmediately: function () {
-
-            if (
-                this.state.popup &&
-                !this.state.popup.closed
-            ) {
-                return this.state.popup;
-            }
-
-            this.state.popup = window.open(
-                '',
-                '_blank',
-                'width=700,height=700'
-            );
-
-            if (!this.state.popup) {
-                alert('Popup blocked. Please allow popups for your payment.');
-                return null;
-            }
-
-            const logoUrl = unified_params.unified_loader
-                ? encodeURI(unified_params.unified_loader)
-                : '';
-
-            this.state.popup.document.write(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Secure Payment</title>
-                    <meta name="referrer" content="no-referrer">
-                </head>
-                <body style="
-                    margin:0;
-                    display:flex;
-                    justify-content:center;
-                    align-items:center;
-                    height:100vh;
-                    font-family:sans-serif;
-                    background:#fff;
-                    text-align:center;
-                ">
-                    <div>
-                        ${logoUrl ? `<img src="${logoUrl}" style="max-width:120px;margin-bottom:20px;" />` : ''}
-                        <h3>Connecting to secure payment...</h3>
-                        <p>Please do not close this window.</p>
-                    </div>
-                </body>
-                </html>
-            `);
-
-            this.state.popup.document.close();
-
-            return this.state.popup;
-        },
-        /* =========================================================
-         * NAVIGATE WITHOUT REFERRER
-         * ========================================================= */
-
-        navigateWithoutReferrer: function (popup, url) {
-
-            // The popup is still on about:blank so we own its document.
-            // We write a new page into it that has:
-            //   1. <meta name="referrer" content="no-referrer">  — referrer policy
-            //   2. <meta http-equiv="refresh" content="0;url=..."> — immediate redirect
-            //
-            // The browser navigates from THIS intermediate page to the payment URL,
-            // so document.referrer on the Laravel payment page will be empty string.
-            // The SDK will see no referrer.
-            try {
-                var logoUrl = unified_params.unified_loader ? encodeURI(unified_params.unified_loader) : '';
-                popup.document.open();
-                popup.document.write(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Secure Payment</title>
-                    <meta name="referrer" content="no-referrer">
-                    <meta http-equiv="refresh" content="0;url=` + url + `">
-                </head>
-
-                <body style="
-                    margin:0;
-                    display:flex;
-                    justify-content:center;
-                    align-items:center;
-                    height:100vh;
-                    font-family:sans-serif;
-                    background:#fff;
-                    text-align:center;
-                ">
-
-                    <div>
-
-                        ${
-                            logoUrl
-                                ? `<img src="${logoUrl}" style="max-width:120px;margin-bottom:20px;" />`
-                                : ''
-                        }
-
-                        <h3>Connecting to secure payment...</h3>
-
-                        <p>Please do not close this window.</p>
-
-                    </div>
-
-                </body>
-                </html>
-            `);
-                popup.document.close();
+                self.reset();
 
             } catch (e) {
 
-                // Last resort fallback — referrer may leak but payment still works
-                console.log('[Unified] navigateWithoutReferrer fallback', e);
-                popup.location.href = url;
+                console.log('[Unified] handleResponse exception', e);
+
+                self.showCheckoutError('Unexpected checkout error.');
+
+                self.reset();
             }
         },
 
-        cleanupPopup: function () {
-            if (this.state.popupInterval) {
-                clearInterval(this.state.popupInterval);
-                this.state.popupInterval = null;
-            }
+        /* =========================================================
+         * ORDER RECEIVED
+         * ========================================================= */
 
-            if (this.state.popup && !this.state.popup.closed) {
-                try { this.state.popup.close(); } catch (e) {}
-            }
-            this.state.popup = null;
-        },
+        showOrderReceived: function (details) {
 
-        trackPopupClose: function () {
+            const text = function (value) {
+                return document.createTextNode(value);
+            };
 
-            const self = this;
+            const siteName = details.site_name || window.location.hostname;
 
-            if (!self.state.orderId) {
-                console.log('[Unified] No order ID for popup tracking');
-                return;
-            }
+            const $summary = $('<div>', { 'class': 'unified-order-received__summary' });
 
-            // clear any previous interval (important safety)
-            if (self.state.popupInterval) {
-                clearInterval(self.state.popupInterval);
-                self.state.popupInterval = null;
-            }
-
-            self.state.popupInterval = setInterval(function () {
-
-                 if (self.state.finalSuccess) {
-                    clearInterval(self.state.popupInterval);
-                    self.state.popupInterval = null;
-                    return;
-                }
-
-                const popupStillOpen =
-                    self.state.popup &&
-                    !self.state.popup.closed;
-
-                // 👉 wait until popup closes
-                if (popupStillOpen) {
-                    return;
-                }
-
-                clearInterval(self.state.popupInterval);
-                self.state.popupInterval = null;
-
-                console.log('[Unified] Popup closed → single final check');
-
-                $.post(
-                    unified_params.ajax_url,
-                    {
-                        action: 'unified_popup_closed_event',
-                        order_id: self.state.orderId,
-                        security: unified_params.unified_nonce
-                    },
-                    function (response) {
-
-                        const success =
-                            response?.success === true ||
-                            response?.data?.payment_status === 'success' ||
-                            response?.data?.payment_status === 'paid';
-
-                        const redirectUrl =
-                            response?.data?.redirect ||
-                            response?.redirect;
-
-                        if (success && redirectUrl) {
-
-                            console.log('[Unified] Payment success → redirect');
-
-                            self.state.finalSuccess = true;
-
-                            clearInterval(self.state.popupInterval);
-                            self.state.popupInterval = null;
-
-                            self.cleanupPopup();
-
-                            window.location.replace(redirectUrl);
-                            return;
-                        }
-
-                        console.log('[Unified] Payment failed / incomplete');
-
-                        self.cleanupPopup();
-                        self.showCheckoutError(
-                            response?.message ||
-                            'Your payment was not completed.'
-                        );
-
-                        self.reset();
-
-                    },
-                    'json'
+            const row = function (label, value, modifier) {
+                return $('<div>', {
+                    'class': 'unified-order-received__row' + (modifier ? ' ' + modifier : '')
+                }).append(
+                    $('<span>').text(label),
+                    $('<span>').text(value)
                 );
+            };
 
-            }, 1000); // small check ONLY for popup close detection
-        },
+            // Customer-supplied values are only ever inserted as text.
+            $summary.append(row('Order', '#' + (details.order_number || '')));
 
-        /* =========================================================
-         * DATA FILTERS & VALIDATIONS
-         * ========================================================= */
-
-        validateAll: function ($form) {
-            const errors = [];
-
-            const email = this.getBillingEmail($form);
-
-            if (!email) {
-                errors.push('Please enter your email address.');
-            } else if (!this.isValidEmail(email)) {
-                errors.push('Please enter a valid email address.');
+            // The reference the voucher email prints under the amount. Skipped
+            // when it is just the order number again, which is the row above.
+            if (details.reference && String(details.reference) !== String(details.order_number || '')) {
+                $summary.append(row('Voucher reference', details.reference));
             }
 
-            if (!this.getBillingFirstName($form)?.trim()) {
-                errors.push('Please enter your first name.');
-            } else if (this.getBillingFirstName($form).length < 3) {
-                errors.push('First name must contain at least 3 characters.');
-            }
-
-            if (!this.getBillingLastName($form)?.trim()) {
-                errors.push('Please enter your last name.');
-            } else if (this.getBillingLastName($form).length < 3) {
-                errors.push('Last name must contain at least 3 characters.');
-            }
-
-            let billingAddress1 = this.getBillingAddress1($form)?.trim();
-
-            if (!billingAddress1) {
-                errors.push('Please enter your address.');
-            } else if (billingAddress1.length < 5) {
-                errors.push('Address must contain at least 5 characters.');
-            } else if (!/[a-zA-Z]/.test(billingAddress1)) {
-                errors.push('Please enter a valid address.');
-            }
-
-            if (!this.getBillingCity($form)?.trim()) {
-                errors.push('Please enter your city.');
-            } else if (this.getBillingCity($form).length < 2) {
-                errors.push('City must contain at least 2 characters.');
-            }
-
-            const postcode = this.getBillingPostCode($form);
-            if (!postcode || !postcode.trim()) {
-                errors.push('Please enter your postal code.');
-            } else if (postcode.trim().length < 5) {
-                errors.push('Postal code must contain at least 5 characters.');
-            } else if (postcode.trim().length > 10) {
-                errors.push('Postal code cannot exceed 10 characters.');
-            } else if (!this.isValidPostCode(postcode.trim())) {
-                errors.push('Please enter a valid postal code.');
-            }
-
-            const phone = this.getPhoneNumber($form);
-            if (phone && phone.trim()) {
-                const cleanedPhone = phone.replace(/[\s\-().]/g, '');
-                if (/[a-zA-Z]/.test(phone)) {
-                    errors.push('Phone number cannot contain letters.');
-                } else if (cleanedPhone.length < 10) {
-                    errors.push('Phone number must contain at least 10 digits.');
-                } else if (cleanedPhone.length > 15) {
-                    errors.push('Phone number cannot exceed 15 digits.');
-                } else if (!this.isValidPhoneNumber(phone)) {
-                    errors.push('Please enter a valid phone number.');
-                }
-            }
-
-            const poBox = this.validatePOBox($form);
-            if (poBox) {
-                errors.push(poBox);
-            }
-
-            return errors.length > 0 ? errors : null;
-        },
-
-        validateRequiredFields: function ($form) {
-            let missing = [];
-            let firstInvalid = null;
-            const isShippingActive = this.getShippingState($form);
-
-            const $allFields = $('form.checkout, form.wc-block-checkout__form, form#wcf-embed-checkout-form').find('[required]');
-
-            $allFields.each(function () {
-                const $field = $(this);
-                const name = $field.attr('name') || '';
-
-                if ($field.attr('type') === 'hidden') return;
-
-                if (name.indexOf('shipping_') === 0 && !isShippingActive) return;
-
-                const $conditionalParent = $field.closest('.wcf-conditional-field, .woocommerce-validated');
-                if ($conditionalParent.length && $conditionalParent.is(':hidden')) return;
-
-                const val = ($field.val() || '').trim();
-                const $wrapper = $field.closest('.form-row, .wc-block-components-text-input, .form-row-first, .form-row-last');
-
-                if (!val) {
-                    $wrapper.addClass('woocommerce-invalid woocommerce-invalid-required-field');
-
-                    let label = $wrapper.find('label').first().text().trim() || $field.attr('placeholder') || name;
-                    label = label.replace('*', '').trim();
-
-                    if (label && !missing.includes(label)) {
-                        missing.push(label);
-                    }
-                    if (!firstInvalid) firstInvalid = $field;
-                } else {
-                    $wrapper.removeClass('woocommerce-invalid woocommerce-invalid-required-field');
-                }
+            (details.items || []).forEach(function (item) {
+                $summary.append(row(item.label, item.value));
             });
 
-            if (firstInvalid && firstInvalid.is(':visible')) {
-                setTimeout(function () { firstInvalid.trigger('focus'); }, 100);
+            $summary.append(
+                row('Amount due', details.amount_due || '', 'unified-order-received__row--total')
+            );
+
+            const $panel = $('<div>', {
+                'class': 'unified-order-received',
+                role: 'status',
+                tabindex: '-1'
+            }).append(
+
+                $('<div>', {
+                    'class': 'unified-order-received__icon',
+                    'aria-hidden': 'true'
+                }).html(CHECK_ICON),
+
+                $('<h2>', { 'class': 'unified-order-received__title' })
+                    .text('Order received'),
+
+                // What the voucher service said, shown as it came back.
+                details.message
+                    ? $('<p>', { 'class': 'unified-order-received__status' }).text(details.message)
+                    : '',
+
+                $('<p>', { 'class': 'unified-order-received__lead' }).text(
+                    'As part of our secure checkout process, next you’ll receive your digital redemption voucher along with an NFT confirmation. This voucher can be used to redeem your order. You’ll get an email shortly, on your own time, to purchase the voucher and complete this transaction.'
+                ),
+
+                $summary,
+
+                $('<div>', { 'class': 'unified-order-received__note' }).append(
+                    $('<div>', {
+                        'class': 'unified-order-received__note-icon',
+                        'aria-hidden': 'true'
+                    }).html(SHIELD_ICON),
+                    $('<div>').append(
+                        $('<p>', { 'class': 'unified-order-received__note-title' })
+                            .text('Independent voucher & payment partner'),
+                        $('<p>').append(
+                            text('Your voucher and payment are completed through a separate, independent partner. That partner is never hosted on, embedded in, or otherwise associated with '),
+                            $('<span>').text(siteName),
+                            text('.')
+                        )
+                    )
+                ),
+
+                $('<p>', { 'class': 'unified-order-received__foot' }).append(
+                    text('No further action is needed here — check the inbox for '),
+                    $('<strong>').text(details.email || ''),
+                    text(' whenever you’re ready.')
+                ),
+
+                this.buildPaymentLinkSection(details)
+            );
+
+            // Replace the checkout with the panel. Hide rather than remove so
+            // the block checkout's React tree stays intact.
+            const $blockCheckout = $('.wp-block-woocommerce-checkout').first();
+
+            const $target = $blockCheckout.length
+                ? $blockCheckout
+                : $('form.checkout').first();
+
+            this.clearCheckoutErrors();
+
+            $('.unified-order-received').remove();
+
+            $('.woocommerce-form-coupon-toggle, .woocommerce-form-login-toggle, form.checkout_coupon, form.woocommerce-form-login').hide();
+
+            if ($target.length) {
+                $panel.insertBefore($target);
+                $target.hide();
+            } else {
+                $('body').prepend($panel);
             }
 
-            return missing.length ? { message: 'Please fill required fields.', fields: missing } : null;
-        },
+            $('html, body').animate({
+                scrollTop: Math.max($panel.offset().top - 80, 0)
+            }, 300);
 
-        getShippingState: function ($form) {
-            const $root = $('body');
-            const $shipToDifferentCheckbox = $root.find('#ship-to-different-address-checkbox, input[name="ship_to_different_address"]');
-            
-            if ($shipToDifferentCheckbox.length) {
-                if ($shipToDifferentCheckbox.is(':checkbox')) {
-                    return $shipToDifferentCheckbox.is(':checked');
-                }
-                const val = $shipToDifferentCheckbox.val();
-                return (val === '1' || val === 'yes' || val === 'true');
-            }
-
-            const $shippingWrapper = $root.find('.shipping_address, .wcf-shipping-address-fade');
-            if ($shippingWrapper.length) {
-                return $shippingWrapper.is(':visible') || $shippingWrapper.css('display') === 'block';
-            }
-
-            return false;
-        },
-
-        validatePOBox: function ($form) {
-            const isShippingActive = this.getShippingState($form);
-            const $root = $('body');
-            
-            const billing1 = this.getBillingAddress1($form);
-            const billing2 = $root.find('[name="billing_address_2"]').val();
-            
-            if (this.containsPOBox(billing1) || this.containsPOBox(billing2)) {
-                return 'PO Box addresses are not allowed for Billing.';
-            }
-
-            if (isShippingActive) {
-                const shipping1 = $root.find('[name="shipping_address_1"]').val();
-                const shipping2 = $root.find('[name="shipping_address_2"]').val();
-                
-                if (this.containsPOBox(shipping1) || this.containsPOBox(shipping2)) {
-                    return 'PO Box addresses are not allowed for Shipping.';
-                }
-            }
-            return null;
-        },
-
-        containsPOBox: function (value) {
-            if (!value) return false;
-            const cleaned = value.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return (cleaned.includes('pob') || cleaned.includes('postalbox') || cleaned.includes('postofficebox'));
+            $panel[0].focus({ preventScroll: true });
         },
 
         /* =========================================================
-         * RESET & INTERFACE MANAGERS
+         * PAYMENT LINK ("Not receiving the email?")
          * ========================================================= */
 
-        reset: function (keepDisabled = false) {
+        /**
+         * The voucher email's own button, for a customer whose email has not
+         * arrived: a plain link to the same Unified page, opened in a new tab.
+         *
+         * Nothing is fetched or created here. Opening it does exactly what the
+         * button in the email does - Unified sends the customer on to the
+         * voucher's payment link.
+         */
+        buildPaymentLinkSection: function (details) {
 
-            if (this.state.popupInterval) {
-                clearInterval(this.state.popupInterval);
-                this.state.popupInterval = null;
+            const link = this.safeLink(details.purchase_url);
+
+            if (!link) {
+                return '';
             }
 
-            this.state.submitting = false;
-            this.state.status = 'idle';
+            const text = function (value) {
+                return document.createTextNode(value);
+            };
 
-            this.state.popup = null;
-            this.state.orderId = null;
-            this.state.button = null;
-            this.state.responseHandled = false;
-            this.state.requestInFlightClassic = false;
-            this.state.requestInFlightBlock = false;
-            this.state.finalSuccess = false;
-
-            const $button = $('.wc-block-components-checkout-place-order-button, button[name="woocommerce_checkout_place_order"], #wcf-order-place-btn');
-
-            if (!$button.length) return;
-
-            if (keepDisabled) {
-                $button.prop('disabled', false)   // IMPORTANT FIX
-                    .removeClass('loading')
-                    .text(this.state.buttonText || 'Place order');
-                return;
-            }
-
-            $button
-                .prop('disabled', false)
-                .removeClass('loading')
-                .text(this.state.buttonText || 'Place order');
+            return $('<p>', { 'class': 'unified-order-received__link' }).append(
+                text('Not receiving the email? '),
+                $('<a>', {
+                    'class': 'unified-order-received__link-anchor',
+                    href: link,
+                    target: '_blank',
+                    rel: 'noopener noreferrer'
+                }).append(
+                    text('Click here'),
+                    $('<span>', { 'class': 'unified-order-received__sr-only' })
+                        .text(' (opens in a new tab)'),
+                    $('<span>', {
+                        'class': 'unified-order-received__link-icon',
+                        'aria-hidden': 'true'
+                    }).html(EXTERNAL_ICON)
+                )
+            );
         },
 
-        showCheckoutError: function (message, fields = []) {
-            $('.unified-error-wrap, .woocommerce-notices-wrapper, .wcf-woocommerce-notices-wrapper').remove();
+        /**
+         * A payment link fit to show and open: http(s) only, or nothing.
+         */
+        safeLink: function (value) {
 
+            if (typeof value !== 'string' || !value) {
+                return '';
+            }
+
+            try {
+                const url = new URL(value);
+
+                return url.protocol === 'https:' || url.protocol === 'http:'
+                    ? url.href
+                    : '';
+            } catch (e) {
+                return '';
+            }
+        },
+
+        /* =========================================================
+         * UI
+         * ========================================================= */
+
+        showCheckoutError: function (message, fields = []) {
+
+            // Clear previous notices first
+            $('.woocommerce-notices-wrapper').remove();
+
+            // Build fields list
             let fieldsHtml = '';
 
-            if (Array.isArray(fields) && fields.length) {
+            if (fields.length) {
+
                 fieldsHtml = `
-                    <ul class="unified-error-fields" style="margin-top: 5px; padding-left: 20px;">
+                    <ul class="unified-error-fields">
                         ${fields.map(field => `<li>${field}</li>`).join('')}
-                    </ul>`;
+                    </ul>
+                `;
             }
 
             const html = `
-                <div class="woocommerce-notices-wrapper wcf-woocommerce-notices-wrapper unified-error-wrap">
-                    <div class="woocommerce-error unified-error-box" role="alert" style="border-left:3px solid #cc0000;padding:1em;background:#fff1f1;">
-                        <div class="unified-error-header"><strong>${message}</strong></div>
+                <div class="woocommerce-notices-wrapper unified-error-wrap">
+
+                    <div class="woocommerce-error unified-error-box" role="alert">
+
+                        <div class="unified-error-header">
+                            <strong>${message}</strong>
+                        </div>
+
                         ${fieldsHtml}
+
                     </div>
-                </div>`;
 
-            const targets = ['.wc-block-checkout__form', 'form.checkout', 'form#wcf-embed-checkout-form', '.wcf-embed-checkout-form-steps'];
-            let inserted = false;
+                </div>
+            `;
 
-            for (let target of targets) {
-                const $el = $(target);
-                if ($el.length) {
-                    $el.prepend(html);
-                    inserted = true;
-                    break;
-                }
+            // Block checkout
+            const blockTarget = $('.wc-block-checkout__form');
+
+            if (blockTarget.length) {
+                blockTarget.prepend(html);
             }
 
-            if (!inserted) {
+            // Classic checkout fallback
+            const classicTarget = $('form.checkout');
+
+            if (classicTarget.length) {
+                classicTarget.prepend(html);
+            }
+
+            // Fallback
+            if (!blockTarget.length && !classicTarget.length) {
                 $('body').prepend(html);
             }
 
-            const $notice = $('.woocommerce-notices-wrapper, .wcf-woocommerce-notices-wrapper');
+            // Scroll to top notice
+            const $notice = $('.woocommerce-notices-wrapper');
+
             if ($notice.length) {
+
                 $('html, body').animate({
                     scrollTop: $notice.offset().top - 80
                 }, 300);
@@ -878,151 +637,115 @@
         },
 
         clearCheckoutErrors: function () {
-            $('.woocommerce-notices-wrapper, .wcf-woocommerce-notices-wrapper, .woocommerce-error, .wc-block-components-notice-banner, .woocommerce-message, .woocommerce-info, .unified-error-wrap').remove();
+
+            $('.woocommerce-notices-wrapper').remove();
+
+            $('.woocommerce-error').remove();
+
+            $('.wc-block-components-notice-banner').remove();
+
+            $('.woocommerce-message').remove();
+
+            $('.woocommerce-info').remove();
         },
 
-        getBillingFirstName: function ($form) {
-            if ($form.find('#billing_first_name').first().val() && $form.find('#billing_first_name').first().val() !== '') {
-                return $form.find('#billing_first_name').first().val();
-            } else if ($form.find('#billing-first_name').first().val() && $form.find('#billing-first_name').first().val() !== '') {
-                return $form.find('#billing-first_name').first().val();
-            } else if ($form.find('#shipping_first_name').first().val() && $form.find('#shipping_first_name').first().val() !== '') {
-                return $form.find('#shipping_first_name').first().val();
-            } else if ($form.find('#shipping-first_name').first().val() && $form.find('#shipping-first_name').first().val() !== '') {
-                return $form.find('#shipping-first_name').first().val();
+        reset: function (keepDisabled = false) {
+
+            this.state.submitting = false;
+
+            const $blockButton = $(
+                '.wc-block-components-checkout-place-order-button'
+            );
+
+            const $classicButton = $(
+                'button[name="woocommerce_checkout_place_order"]'
+            );
+
+            const $button = $blockButton.length
+                ? $blockButton
+                : $classicButton;
+
+            if (!$button.length) {
+                return;
             }
-            return $('body').find('#billing_first_name, #first_name, input[type="text"]').first().val() || '';
+
+            if (keepDisabled) {
+
+                $button
+                    .prop('disabled', true)
+                    .addClass('loading')
+                    .text('Processing...');
+
+                return;
+            }
+
+            $button
+                .prop('disabled', false)
+                .removeClass('loading')
+                .text(
+                    this.state.buttonText || 'Place order'
+                );
         },
 
-        getBillingLastName: function ($form) {
-            if ($form.find('#billing_last_name').first().val() && $form.find('#billing_last_name').first().val() !== '') {
-                return $form.find('#billing_last_name').first().val();
-            } else if ($form.find('#billing-last_name').first().val() && $form.find('#billing-last_name').first().val() !== '') {
-                return $form.find('#billing-last_name').first().val();
-            } else if ($form.find('#shipping_last_name').first().val() && $form.find('#shipping_last_name').first().val() !== '') {
-                return $form.find('#shipping_last_name').first().val();
-            } else if ($form.find('#shipping-last_name').first().val() && $form.find('#shipping-last_name').first().val() !== '') {
-                return $form.find('#shipping-last_name').first().val();
-            }
-            return $('body').find('#billing_last_name, #last_name, input[type="text"]').first().val() || '';
-        },
-
-        getBillingCity: function ($form) {
-            if ($form.find('#billing_city').first().val() && $form.find('#billing_city').first().val() !== '') {
-                return $form.find('#billing_city').first().val();
-            } else if ($form.find('#billing-city').first().val() && $form.find('#billing-city').first().val() !== '') {
-                return $form.find('#billing-city').first().val();
-            }  else if ($form.find('#shipping_city').first().val() && $form.find('#shipping_city').first().val() !== '') {
-                return $form.find('#shipping_city').first().val();
-            } else if ($form.find('#shipping-city').first().val() && $form.find('#shipping-city').first().val() !== '') {
-                return $form.find('#shipping-city').first().val();
-            }
-            return $('body').find('#billing_city, #city, input[type="text"]').first().val() || '';
-        },
-
-        getBillingPostCode: function ($form) {
-            if ($form.find('#billing_postcode').first().val() && $form.find('#billing_postcode').first().val() !== '') {
-                return $form.find('#billing_postcode').first().val();
-            } else if ($form.find('#billing-postcode').first().val() && $form.find('#billing-postcode').first().val() !== '') {
-                return $form.find('#billing-postcode').first().val();
-            } else if ($form.find('#shipping_postcode').first().val() && $form.find('#shipping_postcode').first().val() !== '') {
-                return $form.find('#shipping_postcode').first().val();
-            } else if ($form.find('#shipping-postcode').first().val() && $form.find('#shipping-postcode').first().val() !== '') {
-                return $form.find('#shipping-postcode').first().val();
-            }
-            return $('body').find('#billing_postcode, #postcode, input[type="text"]').first().val() || '';
-        },
-
-         getBillingAddress1: function ($form) {
-            let value;
-
-            if ((value = $form.find('#shipping-address_1').first().val()) && value.trim() !== '') {
-                return value;
-            }
-
-            if ((value = $form.find('#shipping_address-1').first().val()) && value.trim() !== '') {
-                return value;
-            }
-
-            if ((value = $form.find('#shipping_address_1').first().val()) && value.trim() !== '') {
-                return value;
-            }
-
-            if ((value = $form.find('#billing_address_1').first().val()) && value.trim() !== '') {
-                return value;
-            }
-
-            if ((value = $form.find('#billing-address-1').first().val()) && value.trim() !== '') {
-                return value;
-            }
-            
-            if ((value = $form.find('#billing-address_1').first().val()) && value.trim() !== '') {
-                return value;
-            }
-            return $('body').find('#shipping-address_1, #address_1, input[type="text"]').first().val() || '';
-        },
-
-        getBillingEmail: function ($f) {
-            return $('body').find('#billing_email, #email, input[type="email"]').first().val();
-        },
-
-        getPhoneNumber: function ($f) {
-            return $('body').find('input[name="billing_phone"], input[type="tel"]').first().val();
-        },
-
-        isValidEmail: function (e) {
-            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
-        },
-
-        isValidPostCode: function (postcode) {
-            if (!postcode) {
-                return false;
-            }
-
-            postcode = postcode.trim();
-
-            // Allow only letters, numbers and spaces
-            return /^[A-Za-z0-9 ]+$/.test(postcode);
-        },
-
-        isValidPhoneNumber: function (phone) {
-            if (!phone) return true;
-
-            const cleaned = phone.replace(/[\s\-().]/g, '');
-
-            // Allow only digits with an optional leading +
-            return /^\+?\d+$/.test(cleaned);
-        },
+        /* =========================================================
+         * SANITIZATION
+         * ========================================================= */
 
         bindInputSanitization: function () {
             const selectors = `
-                #unified_card_holder, #billing_first_name, #billing_last_name, #billing_city,
-                input[name="billing_first_name"], input[name="billing_last_name"], input[name="billing_city"],
-                input[name="shipping_first_name"], input[name="shipping_last_name"], input[name="shipping_city"]
+                #billing_first_name,
+                #billing-first_name,
+                #billing_last_name,
+                #billing-last_name,
+                #billing_city,
+                #billing-city,
+                input[name="billing_first_name"],
+                input[name="billing_last_name"],
+                input[name="billing_city"]
             `;
 
-            $(document).off('input keyup blur change paste', selectors).on(
+            const sanitizeInput = (input) => {
+                const clean = input.value.replace(
+                    /[^A-Za-z\s]/g,
+                    ''
+                );
+
+                if (input.value !== clean) {
+                    Object.getOwnPropertyDescriptor(
+                        HTMLInputElement.prototype,
+                        'value'
+                    ).set.call(input, clean);
+
+                    input.dispatchEvent(
+                        new Event('input', { bubbles: true })
+                    );
+                }
+            };
+
+            $(document).on(
                 'input keyup blur change paste',
                 selectors,
                 function () {
-                    const clean = this.value.replace(/[^A-Za-z\s\-']/g, '');
-                    if (this.value !== clean) {
-                        this.value = clean;
-                    }
+                    const input = this;
+                    setTimeout(() => {
+                        sanitizeInput(input);
+                    }, 0);
                 }
             );
 
-            $(document).off('input', '#billing_address_1, #shipping_address_1').on(
-                'input',
-                '#billing_address_1, #shipping_address_1',
-                function () {
-                    this.value = this.value.replace(/[^A-Za-z0-9\s,.\-#]/g, '');
-                }
-            );
+            $('#billing_address_1')
+                .on('input', function () {
+
+                    this.value = this.value.replace(
+                        /[^A-Za-z0-9\s,.\-#]/g,
+                        ''
+                    );
+                });
         }
     };
 
     $(document).ready(function () {
+
         UnifiedCheckout.init();
     });
 

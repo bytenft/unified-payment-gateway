@@ -9,7 +9,7 @@ require_once plugin_dir_path(__FILE__) . 'class-unified-payment-state-engine.php
 require_once plugin_dir_path(__FILE__) . 'class-unified-payment-logger.php';
 /**
  * Class UNIFIED_PAYMENT_GATEWAY_Loader
- * Handles the loading and initialization of the Unified Payment Gateway plugin.
+ * Handles the loading and initialization of the Voucher Pay plugin.
  */
 class UNIFIED_PAYMENT_GATEWAY_Loader
 {
@@ -56,7 +56,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		add_filter('cron_schedules', [$this, 'unified_add_cron_interval']);
 		add_action('unified_cron_event', [$this, 'handle_cron_event']);
 		add_action('wp_ajax_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
-		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']); 
+		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
 		add_action('wp', function () {
 		    // Allow notices ONLY on checkout page
 		    if ( ! is_checkout() ) {
@@ -83,6 +83,82 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		});
 
 		add_action('woocommerce_before_checkout_form', [$this, 'unified_show_checkout_error']);
+
+		// Prevent order reuse on standard checkout for this gateway if identity changes
+		add_action('woocommerce_before_checkout_process', function() {
+			if ( isset( $_POST['payment_method'] ) && 'unified' === $_POST['payment_method'] ) {
+				if ( function_exists('WC') && WC()->session ) {
+					$awaiting_order_id = WC()->session->get('order_awaiting_payment');
+					if ( $awaiting_order_id ) {
+						$awaiting_order = wc_get_order( $awaiting_order_id );
+						$posted_email   = isset($_POST['billing_email']) ? sanitize_email($_POST['billing_email']) : '';
+						$posted_phone   = isset($_POST['billing_phone']) ? sanitize_text_field($_POST['billing_phone']) : '';
+						
+						if ( $awaiting_order && ( $awaiting_order->get_billing_email() !== $posted_email || $awaiting_order->get_billing_phone() !== $posted_phone ) ) {
+							WC()->session->set( 'order_awaiting_payment', null );
+						} else {
+							$this->unified_reopen_retryable_order( $awaiting_order_id );
+						}
+					}
+				}
+			}
+		});
+	}
+
+	/**
+	 * Put a retryable order back in play so a retry keeps its order number.
+	 *
+	 * WooCommerce resumes 'order_awaiting_payment' only while the order is
+	 * still pending or failed. A cancelled one is abandoned and the retry is
+	 * given a brand new order number, which is how the same customer walks away
+	 * with orders #1001, #1002, #1003 for one purchase - and why the
+	 * application, which counts failed attempts against a WooCommerce order id,
+	 * sees a first attempt every time and never reaches the merchant's limit.
+	 *
+	 * Re-opening keeps order #1001 across attempts 1..N, so the attempt count
+	 * accumulates where the merchant configured it and a later success
+	 * finalizes that same order.
+	 *
+	 * Only this gateway's own unpaid orders qualify: anything already paid, or
+	 * belonging to another gateway, is left exactly as it is.
+	 *
+	 * @param int $order_id Order the session is still pointing at.
+	 * @return void
+	 */
+	private function unified_reopen_retryable_order( $order_id ) {
+
+		$order = $order_id ? wc_get_order( $order_id ) : false;
+
+		if ( ! $order instanceof WC_Order || $order->get_payment_method() !== 'unified' ) {
+			return;
+		}
+
+		// Pending and failed are resumed by WooCommerce itself; nothing to do.
+		if ( ! $order->has_status( [ 'cancelled', 'on-hold' ] ) ) {
+			return;
+		}
+
+		/*
+		 * Never reopen a payment that went through. A paid order is finished,
+		 * and reopening it would put it back in the queue for another one.
+		 */
+		if (
+			$order->get_date_paid( 'edit' ) ||
+			$order->get_meta( '_unified_payment_success' ) === 'yes' ||
+			Unified_Payment_State_Engine::resolve_final_state( $order ) === 'success'
+		) {
+			return;
+		}
+
+		$order->update_status(
+			'pending',
+			__( 'Reopened for a new Voucher Pay payment attempt.', 'unified-payment-gateway' )
+		);
+
+		Unified_Payment_Gateway_Logger::info(
+			'[Order #' . $order->get_id() . '] Reopened for a new payment attempt; order number preserved.',
+			[ 'order_id' => $order->get_id() ]
+		);
 	}
 
 	/**
@@ -130,7 +206,13 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			);
 		}
 
-		$orderID = WC()->session ? WC()->session->get('store_api_draft_order') : null;
+		$orderID = WC()->session
+			? ( WC()->session->get('store_api_draft_order') ?: WC()->session->get('order_awaiting_payment') )
+			: null;
+
+		if ( ! empty( WC()->cart ) && ! WC()->cart->is_empty() ) {
+			$orderID = $this->unified_create_block_order() ?: $orderID;
+		}
 
 		$status = [];
 		if($orderID){
@@ -142,6 +224,114 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		
 		wp_send_json($status);
 		die;
+	}
+
+	/**
+	 * Create the WooCommerce order for a block checkout payment.
+	 *
+	 * Delegates to WC_Checkout::create_order() so line items, shipping lines,
+	 * coupons, taxes and totals are built by WooCommerce itself rather than by
+	 * hand here.
+	 *
+	 * @return int Order ID, or 0 on failure.
+	 */
+	private function unified_create_block_order() {
+
+		$checkout = WC()->checkout();
+		$data     = $checkout->get_posted_data();
+		$customer = WC()->customer;
+
+		if ( $customer ) {
+
+			$fields = [
+				'first_name',
+				'last_name',
+				'company',
+				'address_1',
+				'address_2',
+				'city',
+				'state',
+				'postcode',
+				'country',
+				'phone',
+				'email',
+			];
+
+			foreach ( $fields as $field ) {
+
+				$key = 'billing_' . $field;
+
+				if ( ! empty( $data[ $key ] ) ) {
+					continue;
+				}
+
+				$getter = 'get_' . $key;
+
+				if ( is_callable( [ $customer, $getter ] ) ) {
+					$data[ $key ] = $customer->$getter();
+				}
+			}
+		}
+
+		if ( empty( $data['payment_method'] ) ) {
+			$data['payment_method'] = 'unified';
+		}
+
+		// Prevent reusing an order if the email address OR phone number doesn't match
+		if ( WC()->session ) {
+			$awaiting_order_id = WC()->session->get('order_awaiting_payment') ?: WC()->session->get('store_api_draft_order');
+			if ( $awaiting_order_id ) {
+				$awaiting_order = wc_get_order( $awaiting_order_id );
+				$posted_email   = sanitize_email( $data['billing_email'] ?? '' );
+				$posted_phone   = sanitize_text_field( $data['billing_phone'] ?? '' );
+				
+				if ( $awaiting_order && ( $awaiting_order->get_billing_email() !== $posted_email || $awaiting_order->get_billing_phone() !== $posted_phone ) ) {
+					WC()->session->set( 'order_awaiting_payment', null );
+					WC()->session->set( 'store_api_draft_order', null );
+				} else {
+					/*
+					 * Same customer retrying: keep their order number so the
+					 * application's per-order attempt count keeps counting.
+					 * create_order() below reads 'order_awaiting_payment', so
+					 * the pointer is moved there when the draft order is the
+					 * only one the session still holds.
+					 */
+					WC()->session->set( 'order_awaiting_payment', $awaiting_order_id );
+					$this->unified_reopen_retryable_order( $awaiting_order_id );
+				}
+			}
+		}
+
+		$order_id = $checkout->create_order( $data );
+
+		if ( is_wp_error( $order_id ) ) {
+
+			Unified_Payment_Gateway_Logger::error(
+				'Could not create order for block checkout',
+				[
+					'error' => $order_id->get_error_message(),
+				]
+			);
+
+			return 0;
+		}
+
+		if ( WC()->session ) {
+			WC()->session->set( 'order_awaiting_payment', $order_id );
+		}
+
+		$created = wc_get_order( $order_id );
+
+		Unified_Payment_Gateway_Logger::info(
+			'Created order for block checkout',
+			[
+				'order_id' => $order_id,
+				'total'    => $created ? $created->get_total() : null,
+				'email'    => $created ? $created->get_billing_email() : null,
+			]
+		);
+
+		return $order_id;
 	}
 
 	/**
@@ -179,7 +369,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	{
 		if (!function_exists('WC')) return;
 
-		$error = WC()->session->get('unified_error');
+		$error = WC()->session->get('unified_error') ?: WC()->session->get('unified_error');
 		if (!$error) return;
 
 		$messages = [
@@ -189,6 +379,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		];
 
 		// Clear error immediately
+		WC()->session->__unset('unified_error');
 		WC()->session->__unset('unified_error');
 
 		if (isset($messages[$error])) {
@@ -239,6 +430,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			);
 
 			$settings = get_option( 'woocommerce_unified_settings', [] );
+			if (empty($settings)) {
+				$settings = get_option( 'woocommerce_unified_settings', [] );
+			}
 
 			wp_localize_script(
 				'unified-blocks-js',
@@ -340,6 +534,10 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			], 404);
 		}
 
+		$order_key = isset($_POST['order_key'])
+			? sanitize_text_field(wp_unslash($_POST['order_key']))
+			: '';
+
 		$security = isset($_POST['security'])
 			? sanitize_text_field(wp_unslash($_POST['security']))
 			: '';
@@ -347,16 +545,20 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		$log_prefix = "[Order #{$order_id}]";
 
 		// -------------------------
-		// NONCE CHECK
+		// SECURITY CHECK (NONCE OR ORDER KEY)
 		// -------------------------
-		if (empty($security) || !wp_verify_nonce($security, 'unified_payment')) {
+		$is_nonce_valid = !empty($security) && wp_verify_nonce($security, 'unified_payment');
+		$is_key_valid   = !empty($order_key) && hash_equals($order->get_order_key(), $order_key);
+
+		if (!$is_nonce_valid && !$is_key_valid) {
 
 			Unified_Payment_Gateway_Logger::info(
-				$log_prefix . ' CheckStatus | Invalid nonce'
+				$log_prefix . ' CheckStatus | Invalid security token / order key'
 			);
 
 			wp_send_json_error([
-				'message' => 'Nonce verification failed.'
+				'message'      => 'Security check failed.',
+				'stop_polling' => true
 			]);
 
 			wp_die();
@@ -365,7 +567,25 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		// API CALL
 		// -------------------------
-		$payment_token = $order->get_meta('_unified_pay_id');
+		$payment_token = $order->get_meta('_unified_pay_id') ?: $order->get_meta('_unified_pay_id');
+
+		$public_key = $order->get_meta('_unified_public_key');
+		if (empty($public_key)) {
+			$accounts = get_option('woocommerce_unified_payment_gateway_accounts', []);
+			if (is_string($accounts)) {
+				$accounts = maybe_unserialize($accounts);
+			}
+			$settings = get_option('woocommerce_unified_settings', []);
+			$is_sandbox = ($settings['sandbox'] ?? 'no') === 'yes';
+			if (!empty($accounts) && is_array($accounts)) {
+				if (isset($accounts['live_public_key']) || isset($accounts['sandbox_public_key'])) {
+					$first_account = $accounts;
+				} else {
+					$first_account = reset($accounts);
+				}
+				$public_key = $is_sandbox ? ($first_account['sandbox_public_key'] ?? '') : ($first_account['live_public_key'] ?? '');
+			}
+		}
 
 		$response = wp_remote_post(
 			$this->get_api_url('/api/update-txn-status'),
@@ -377,7 +597,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				]),
 				'headers' => [
 					'Content-Type'  => 'application/json',
-					'Authorization' => 'Bearer ' . $security,
+					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
 				],
 				'timeout' => 15,
 			]
@@ -428,7 +648,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				$log_prefix . " CheckStatus | Engine trigger ({$payment_status})"
 			);
 
-			$result = UNIFIED_PAYMENT_ENGINE::handle_event(
+			$result = Unified_Payment_State_Engine::handle_event(
 				$order_id,
 				'redirect_check',
 				[
@@ -449,7 +669,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		$wc_status = $order->get_status();
 
-		$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state(
+		$state = Unified_Payment_State_Engine::resolve_final_state(
 			$order,
 			$payment_status
 		);
@@ -506,27 +726,15 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			? sanitize_text_field(wp_unslash($_POST['order_id']))
 			: 'unknown';
 
+		$order_key = isset($_POST['order_key'])
+			? sanitize_text_field(wp_unslash($_POST['order_key']))
+			: '';
+
 		$security = isset($_POST['security'])
 			? sanitize_text_field(wp_unslash($_POST['security']))
 			: '';
 
 		$log_prefix = "[Order #{$order_id}]";
-
-		// -------------------------
-		// NONCE CHECK
-		// -------------------------
-		if (empty($security) || !wp_verify_nonce($security, 'unified_payment')) {
-
-			Unified_Payment_Gateway_Logger::info(
-				$log_prefix . ' PopupClose | Invalid nonce'
-			);
-
-			wp_send_json_error([
-				'reload' => true
-			]);
-
-			wp_die();
-		}
 
 		// -------------------------
 		// ORDER CHECK
@@ -540,7 +748,30 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			);
 
 			wp_send_json_error([
-				'reload' => true
+				'reload'       => false,
+				'stop_polling' => true,
+				'message'      => 'Order not found.'
+			]);
+
+			wp_die();
+		}
+
+		// -------------------------
+		// SECURITY CHECK (NONCE OR ORDER KEY)
+		// -------------------------
+		$is_nonce_valid = !empty($security) && wp_verify_nonce($security, 'unified_payment');
+		$is_key_valid   = !empty($order_key) && hash_equals($order->get_order_key(), $order_key);
+
+		if (!$is_nonce_valid && !$is_key_valid) {
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' PopupClose | Invalid security token / order key'
+			);
+
+			wp_send_json_error([
+				'reload'       => false,
+				'stop_polling' => true,
+				'message'      => 'Security verification failed.'
 			]);
 
 			wp_die();
@@ -549,10 +780,24 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		// API CALL
 		// -------------------------
-		$payment_token = $order->get_meta('_unified_active_pay_id');
+		$payment_token = $order->get_meta('_unified_pay_id') ?: $order->get_meta('_unified_pay_id');
 
-		if (empty($payment_token)) {
-			$payment_token = $order->get_meta('_unified_pay_id');
+		$public_key = $order->get_meta('_unified_public_key');
+		if (empty($public_key)) {
+			$accounts = get_option('woocommerce_unified_payment_gateway_accounts', []);
+			if (is_string($accounts)) {
+				$accounts = maybe_unserialize($accounts);
+			}
+			$settings = get_option('woocommerce_unified_settings', []);
+			$is_sandbox = ($settings['sandbox'] ?? 'no') === 'yes';
+			if (!empty($accounts) && is_array($accounts)) {
+				if (isset($accounts['live_public_key']) || isset($accounts['sandbox_public_key'])) {
+					$first_account = $accounts;
+				} else {
+					$first_account = reset($accounts);
+				}
+				$public_key = $is_sandbox ? ($first_account['sandbox_public_key'] ?? '') : ($first_account['live_public_key'] ?? '');
+			}
 		}
 
 		$response = wp_remote_post(
@@ -565,7 +810,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				]),
 				'headers' => [
 					'Content-Type'  => 'application/json',
-					'Authorization' => 'Bearer ' . $security,
+					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
 				],
 				'timeout' => 15,
 			]
@@ -629,7 +874,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		// ENGINE CALL
 		// -------------------------
-		$result = UNIFIED_PAYMENT_ENGINE::handle_event(
+		$result = Unified_Payment_State_Engine::handle_event(
 			$order_id,
 			'popup_close',
 			[
@@ -638,37 +883,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			]
 		);
 
-		// ❌ REMOVE locked_skip handling completely
-
 		Unified_Payment_Gateway_Logger::info(
-			$log_prefix . ' PopupClose | Engine result: ' . wp_json_encode($result)
+			$log_prefix . " PopupClose | Engine result: " . json_encode($result)
 		);
-
-		// Ignore lock races and wait for next poll
-		if (
-			is_array($result) &&
-			(($result['reason'] ?? '') === 'locked_skip')
-		)
-		{
-			$order = wc_get_order($order_id);
-
-			$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state($order);
-
-			wp_send_json([
-				'success' => ($state === 'success'),
-				'message' => '',
-				'data' => [
-					'state'          => $state ?: 'processing',
-					'payment_status' => $payment_status,
-					'redirect'       => $state === 'success'
-						? $order->get_checkout_order_received_url()
-						: null,
-					'order_id'       => $order_id,
-				],
-			]);
-
-			wp_die();
-		}
 
 		// -------------------------
 		// ALWAYS RELOAD ORDER AFTER ENGINE
@@ -676,12 +893,12 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		$order = wc_get_order($order_id);
 
 		// 🔥 PRIMARY STATE = ENGINE STORED STATE ONLY
-		$state = UNIFIED_PAYMENT_ENGINE::resolve_final_state($order);
+		$state = Unified_Payment_State_Engine::resolve_final_state($order);
 
 		// -------------------------
 		// HARD OVERRIDE SAFETY (ONLY ONE SOURCE)
 		// -------------------------
-		if ($order->get_meta('_unified_state') === 'success') {
+		if ($order->get_meta('_unified_state') === 'success' || $order->get_meta('_unified_state') === 'success') {
 			$state = 'success';
 		}
 
@@ -690,10 +907,6 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		$is_success = ($state === 'success');
 
-		if ($state !== 'success' && !empty($response_data['transaction_status']) && $response_data['transaction_status'] === 'processing') {
-
-			$state = 'processing';
-		}
 		// -------------------------
 		// MESSAGE
 		// -------------------------
@@ -720,7 +933,6 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		// -------------------------
 		$redirect = null;
 
-		// 🔥 ONLY ENGINE STATE DECIDES REDIRECT
 		if ($state === 'success') {
 
 			$redirect = $order->get_checkout_order_received_url();
@@ -790,6 +1002,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		$logger_context = ['source' => 'unified-payment-gateway'];
 
 		$accounts = get_option('woocommerce_unified_payment_gateway_accounts');
+		if (empty($accounts)) {
+			$accounts = get_option('woocommerce_unified_payment_gateway_accounts');
+		}
 		if (is_string($accounts)) {
 			$unserialized = maybe_unserialize($accounts);
 			$accounts = is_array($unserialized) ? $unserialized : [];
@@ -840,7 +1055,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		]);
 
 		if (is_wp_error($response)) {
-			Unified_Payment_Gateway_Logger::error('Unable to connect to the sync service. Please check the server connection or endpoint.', $logger_context);
+			Unified_Payment_Gateway_Logger::error('Unable to connect to the sync service. Please check the server connection or endpoint.', array_merge($logger_context, [
+				'error' => $response->get_error_message(),
+			]));
 			return [];
 		}
 
@@ -923,7 +1140,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 
 		// Check user capabilities
 		if (!current_user_can('manage_woocommerce')) {
-		Unified_Payment_Gateway_Logger::error('Unauthorized manual sync attempt by user ID: ' . get_current_user_id(), $logger_context);
+			Unified_Payment_Gateway_Logger::error('Unauthorized manual sync attempt by user ID: ' . get_current_user_id(), $logger_context);
 			wp_send_json_error([
 				'message' => __('You do not have permission to perform this action.', 'unified-payment-gateway')
 			], 403);
@@ -963,7 +1180,10 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	public function unified_send_plugin_status($plugin_status, $gateway_loaded)
 	{
 		$accounts = get_option('woocommerce_unified_payment_gateway_accounts', []);
-		
+		if (empty($accounts)) {
+			$accounts = get_option('woocommerce_unified_payment_gateway_accounts', []);
+		}
+
 		if (is_string($accounts)) {
 			$unserialized = maybe_unserialize($accounts);
 			$accounts = is_array($unserialized) ? $unserialized : [];

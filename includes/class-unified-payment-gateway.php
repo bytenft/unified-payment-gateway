@@ -46,8 +46,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 		$this->id                 = self::ID;
 		$this->icon               = '';
-		$this->method_title       = __('Unified Payment Gateway', 'unified-payment-gateway');
-		$this->method_description = __('This plugin allows you to accept payments in USD through a secure payment gateway integration.', 'unified-payment-gateway');
+		$this->method_title       = __('Voucher Pay', 'unified-payment-gateway');
+		$this->method_description = __('Purchase and pay quickly with a voucher', 'unified-payment-gateway');
 
 		$this->unified_init_form_fields();
 		$this->init_settings();
@@ -96,6 +96,8 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 		add_action('wp_ajax_unified_log_event', [$this, 'handle_log_event']);
 		add_action('wp_ajax_nopriv_unified_log_event', [$this, 'handle_log_event']);
+
+		add_action('woocommerce_thankyou_' . $this->id, [$this, 'unified_thankyou_payment_link_notice']);
 
 	}
 
@@ -581,15 +583,9 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'gateway_loaded' => 0,
 				'group_id'       => get_option('unified_group_id'),
 				'domain_name'    => parse_url(home_url(), PHP_URL_HOST),
-				'valid_accounts'        => $valid_accounts,
-				'plugin_status'         => $enabled === 'yes' ? 1 : 0,
-				'plugin_version'        => $plugin_version,
 				'wordpress_version'     => $wp_version,
 				'woocommerce_version'   => class_exists('WooCommerce') ? WC()->version : null,
 				'woocommerce_db_version'=> get_option('woocommerce_db_version'),
-				'gateway_loaded'        => 0,
-				'group_id'              => get_option('unified_group_id'),
-				'domain_name'           => parse_url(home_url(), PHP_URL_HOST),
 			];
 
 			wp_remote_post($api_url, [
@@ -603,7 +599,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'sslverify' => true,
 			]);
 
-			$this->admin_notices->unified_add_notice('settings_success', 'notice notice-success', __('Settings saved successfully.', 'unified-payment-gateway'));
 			Unified_Payment_Gateway_Logger::info('Account settings updated successfully.', ['count' => count($valid_accounts)]);
 
 			if (class_exists('UNIFIED_PAYMENT_GATEWAY_Loader')) {
@@ -732,7 +727,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 			'enabled' => [
 				'title'   => __('Enable/Disable', 'unified-payment-gateway'),
-				'label'   => __('Enable Unified Payment Gateway', 'unified-payment-gateway'),
+				'label'   => __('Enable Voucher Pay', 'unified-payment-gateway'),
 				'type'    => 'checkbox',
 				'default' => 'no',
 			],
@@ -741,7 +736,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'title'       => __('Title', 'unified-payment-gateway'),
 				'type'        => 'text',
 				'description' => __('This controls the title which the user sees during checkout.', 'unified-payment-gateway'),
-				'default'     => __('Buy with USDC Using Your Credit/Debit Card, Apple Pay or Google Pay — Secure, Modern Checkout 🔐', 'unified-payment-gateway'),
+				'default'     => __('Voucher Pay', 'unified-payment-gateway'),
 				'desc_tip'    => true,
 			],
 
@@ -749,11 +744,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 				'title'       => __('Description', 'unified-payment-gateway'),
 				'type'        => 'textarea',
 				'description' => __('Provide a brief description of the payment option.', 'unified-payment-gateway'),
-				'default'     => __(
-					'<p style="margin:0 0 6px; font-size:13px;">Use a Credit Card, Debit Card or Google Pay, Apple Pay to complete your purchase via USDC</p>
-					<p style="margin:0 0 6px; font-size:13px;">The transaction will appear on your bank or card statement as ByteNFT*MSN</p>',
-					'unified-payment-gateway'
-				),
+				'default'     => __('Purchase and pay quickly with a voucher', 'unified-payment-gateway'),
 				'desc_tip'    => true,
 			],
 
@@ -1091,9 +1082,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 				if (WC()->cart) {
 					WC()->cart->empty_cart();
-					WC()->session->cleanup_sessions();
-					WC()->session->destroy_session();
-					WC()->session->set_customer_session_cookie(false);
 				}
 
 				$redirect = $status === 'completed'
@@ -1124,365 +1112,69 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			}
 
 			// -------------------------------------------------
-			// 7. PAYMENT ACCOUNT LOOP (UNCHANGED LOGIC)
+			// 7. VOUCHER EMAIL (SENT BY UNIFIED)
 			// -------------------------------------------------
+			// Checkout creates no payment link. Unified emails the customer a
+			// voucher, and the payment link behind its button is created when they
+			// open it. All this plugin does is ask for that email and repeat what
+			// Unified says about it.
+			$order->update_status('pending', __('Awaiting voucher purchase.', 'unified-payment-gateway'));
 
-		$accounts = $this->get_all_available_accounts();
+			$voucher = $this->unified_request_voucher_email($order);
 
-		if (empty($accounts)) {
-			return $this->build_response(
-				'fail',
-				'No eligible payment provider available.',
-				[],
-				400,
-				$order_id
-			);
-		}
+			if (!$voucher['success']) {
 
-		$selected_account = null;
-		$payment_data     = null;
-		$last_error_data  = null;
-		$failed_accounts  = [];
+				$voucher_error = $voucher['message'];
 
-		foreach ($accounts as $account) {
-
-			$public_key = $this->sandbox
-				? $account['sandbox_public_key']
-				: $account['live_public_key'];
-
-			$secret_key = $this->sandbox
-				? $account['sandbox_secret_key']
-				: $account['live_secret_key'];
-
-			// Skip already used accounts
-			if (in_array($public_key, $used_accounts, true)) {
-
-				Unified_Payment_Gateway_Logger::info(
-					$log_prefix . ' Account skipped (already used)',
-					[
-						'account_title' => $account['title'] ?? null,
-						'public_key'    => $public_key,
-					]
-				);
-
-				continue;
-			}
-
-			// Prepare payment data
-			$data = $this->unified_prepare_payment_data($order, $public_key, $secret_key);
-
-			if (is_array($data) && ($data['result'] ?? '') === 'fail') {
-
-				Unified_Payment_Gateway_Logger::warning(
-					$log_prefix . ' Account preparation failed',
-					[
-						'account_title' => $account['title'] ?? null,
-						'public_key'    => $public_key,
-						'data'          => $data,
-					]
-				);
-
-				$used_accounts[] = $public_key;
-				$failed_accounts[] = [
-					'account' => $account['title'] ?? null,
-					'reason'  => 'prepare_failed',
-				];
-
-				continue;
-			}
-
-			$limit_url = $this->get_api_url('/api/dailylimit');
-
-			$limit_resp = wp_remote_post($limit_url, [
-				'method'  => 'POST',
-				'timeout' => 30,
-				'body'    => $data,
-				'headers' => [
-					'Content-Type'  => 'application/x-www-form-urlencoded',
-					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
-				],
-			]);
-
-			if (is_wp_error($limit_resp)) {
-
-				Unified_Payment_Gateway_Logger::warning(
-					$log_prefix . ' Daily limit API WP error',
-					[
-						'account_title' => $account['title'] ?? null,
-						'error'         => $limit_resp->get_error_message(),
-					]
-				);
-
-				$used_accounts[] = $public_key;
-				$failed_accounts[] = [
-					'account' => $account['title'] ?? null,
-					'reason'  => 'wp_error',
-				];
-
-				continue;
-			}
-
-			$limit_data = json_decode(wp_remote_retrieve_body($limit_resp), true);
-
-			if (($limit_data['status'] ?? '') === 'error') {
-
-				Unified_Payment_Gateway_Logger::warning(
-					$log_prefix . ' Account rejected by daily limit API',
-					[
-						'account_title' => $account['title'] ?? null,
-						'response'      => $limit_data,
-					]
-				);
-
-				$last_error_data = $limit_data;
-
-				$used_accounts[] = $public_key;
-				$failed_accounts[] = [
-					'account' => $account['title'] ?? null,
-					'reason'  => 'limit_error',
-					'response'=> $limit_data,
-				];
-
-				continue;
-			}
-
-			// ✅ SUCCESS
-			Unified_Payment_Gateway_Logger::info(
-				$log_prefix . ' Account selected',
-				[
-					'account_title' => $account['title'] ?? null,
-					'public_key'    => $public_key,
-				]
-			);
-
-			$selected_account = $account;
-			$payment_data     = $data;
-
-			break;
-		}
-
-			if (!$selected_account) {
-
-				if ($last_error_data) {
-
-					if (!empty($last_error_data['max_limit_reached'])) {
-
-						return $this->build_response(
-							'fail',
-							'The transaction amount exceeds the maximum allowed limit.',
-							[],
-							400,
-							$order_id
-						);
-					}
-
-					$order->update_meta_data('_unified_limit_exceeded', true);
-					$order->save();
-
-					return $this->build_response(
-						'fail',
-						$last_error_data['message'] ?? 'Payment limit error.',
-						[],
-						400,
-						$order_id
-					);
+				// Classic checkout only relays queued notices in its failure response.
+				if (!$this->is_block_checkout_request() && is_checkout()) {
+					wc_add_notice($voucher_error, 'error');
 				}
-
-				Unified_Payment_Gateway_Logger::error(
-					'No eligible payment provider available for this order.',
-					[
-						'order_id' => $order_id ?? null
-					]
-				);
 
 				return $this->build_response(
 					'fail',
-					'No eligible payment provider available for this order',
+					$voucher_error,
 					[],
 					400,
 					$order_id
 				);
-				}
+			}
 
-				// -------------------------------------------------
-				// 8. PAYMENT REQUEST
-				// -------------------------------------------------
-				$account    = $selected_account;
-				$data       = $payment_data;
+			$this->unified_record_voucher_sent($order, $voucher['data']);
 
-				$public_key = $this->sandbox ? $account['sandbox_public_key'] : $account['live_public_key'];
-				$secret_key = $this->sandbox ? $account['sandbox_secret_key'] : $account['live_secret_key'];
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' Voucher email requested',
+				[
+					'order_id'  => $order_id,
+					'reference' => $voucher['data']['reference'] ?? null,
+				]
+			);
 
-				$api_url = esc_url($this->base_url . '/api/request-payment');
-
-				Unified_Payment_Gateway_Logger::info(
-					$log_prefix . ' Payment request data',
-					[
-						'payload'    => $data,
-					]
-				);
-
-				$response = wp_remote_post($api_url, [
-					'method'    => 'POST',
-					'timeout'   => 30,
-					'body'      => $data,
-					'headers'   => [
-						'Content-Type'  => 'application/x-www-form-urlencoded',
-						'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
+			return $this->build_response(
+				'success',
+				$voucher['message'],
+				[
+					'payment_status' => 'pending',
+					'order_received' => [
+						'order_number' => $order->get_order_number(),
+						'email'        => $order->get_billing_email(),
+						'items'        => $this->unified_get_summary_rows($order),
+						'amount_due'   => $this->unified_plain_price($order->get_total(), $order),
+						'site_name'    => wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES),
+						// Shown on the checkout exactly as Unified worded it.
+						'message'      => $voucher['message'],
+						'reference'    => $voucher['data']['reference'] ?? '',
+						// The email button's own link, so "Not receiving the email?
+						// Click here" opens exactly what the email would. Empty from
+						// a Unified that does not send it, and then not offered.
+						'purchase_url' => esc_url_raw((string) ($voucher['data']['purchase_url'] ?? ''), ['https', 'http']),
 					],
-					'sslverify' => true,
-				]);
-
-				if (is_wp_error($response)) {
-
-					return $this->build_response(
-						'fail',
-						'Payment error: Unable to process.',
-						[],
-						500,
-						$order_id
-					);
-				}
-
-				$resp_data = json_decode(wp_remote_retrieve_body($response), true);
-
-				Unified_Payment_Gateway_Logger::info(
-					'Payment API response received',
-					[
-						'order_id' => $order_id,
-						'status'   => $resp_data['status'] ?? null,
-						'pay_id'   => $resp_data['data']['pay_id'] ?? null,
-					]
-				);
-
-				if (($resp_data['status'] ?? '') === 'error') {
-
-					$error_msg = sanitize_text_field(
-						$resp_data['message'] ?? $resp_data['context']['message'] ?? 'Payment failed.'
-					);
-					if (!$this->is_block_checkout_request() && is_checkout()) {
-						wc_add_notice($error_msg, 'error');
-					}
-
-					return $this->build_response(
-						'fail',
-						$error_msg,
-						[],
-						400,
-						$order_id
-					);
-				}
-
-				// -------------------------------------------------
-				// 9. DATABASE (UNCHANGED - KEPT EXACTLY SAME)
-				// -------------------------------------------------
-				$table_name = $wpdb->prefix . 'order_payment_link';
-
-				$pay_id = $resp_data['data']['pay_id'] ?? '';
-
-				if (!empty($resp_data['data']['payment_link'])) {
-
-					$existing = $wpdb->get_var($wpdb->prepare(
-						"SELECT id FROM $table_name WHERE order_id = %d",
-						$order_id
-					));
-
-					if ($existing) {
-
-						$wpdb->update(
-							$table_name,
-							[
-								'uuid'           => sanitize_text_field($pay_id),
-								'payment_link'   => esc_url_raw($resp_data['data']['payment_link']),
-								'customer_email' => sanitize_email($resp_data['data']['customer_email']),
-								'amount'         => number_format((float)($resp_data['data']['amount'] ?? 0), 2, '.', ''),
-								'created_at'     => current_time('mysql', 1),
-							],
-							['order_id' => $order_id]
-						);
-					} else {
-
-						$wpdb->insert(
-							$table_name,
-							[
-								'order_id'       => $order_id,
-								'uuid'           => sanitize_text_field($pay_id),
-								'payment_link'   => esc_url_raw($resp_data['data']['payment_link']),
-								'customer_email' => sanitize_email($resp_data['data']['customer_email']),
-								'amount'         => number_format((float)($resp_data['data']['amount'] ?? 0), 2, '.', ''),
-								'created_at'     => current_time('mysql', 1),
-							]
-						);
-					}
-				}
-
-				// -------------------------------------------------
-				// 10. PAY ID UPDATE (UNCHANGED)
-				// -------------------------------------------------
-				if (!empty($pay_id)) {
-
-					$order->update_meta_data('_unified_pay_id', $pay_id);
-					$order->update_meta_data('_unified_pay_id_updated_at', time());
-
-					$order->update_meta_data('_unified_active_pay_id', $pay_id);
-					$order->update_meta_data('_unified_payment_finalized', false);
-				}
-
-				// -------------------------------------------------
-				// 11. SUCCESS RESPONSE
-				// -------------------------------------------------
-
-				$order->update_status('pending', __('Payment pending.', 'unified-payment-gateway'));
-
-				unified_add_unique_order_note(
-					$order,
-					'payment_initiated',
-					sprintf(
-						__('Payment initiated via Unified (%s)', 'unified-payment-gateway'),
-						$account['title']
-					)
-				);
-
-				$payment_link = $resp_data['data']['payment_link'] ?? null;
-
-				if (empty($payment_link)) {
-
-					Unified_Payment_Gateway_Logger::error(
-						'Missing payment link in response',
-						[
-							'order_id' => $order_id,
-							'pay_id'   => $pay_id ?? null,
-						]
-					);
-
-					return $this->build_response(
-						'fail',
-						'Payment could not be initiated. Please try again in a moment.',
-						[],
-						500,
-						$order_id
-					);
-				}
-
-				Unified_Payment_Gateway_Logger::info(
-					$log_prefix . ' Payment initiated successfully',
-					[
-						'order_id'    => $order_id,
-						'pay_id'      => $pay_id,
-						'payment_link'=> $payment_link,
-					]
-				);
-
-				return $this->build_response(
-					'success',
-					'Payment initiated',
-					[
-						'payment_status' => $resp_data['data']['payment_status'] ?? 'pending',
-						'redirect' => esc_url($payment_link)
-					],
-					200,
-					$order_id
-				);
+					// Followed by non-AJAX submissions such as the order-pay page.
+					'redirect'       => $order->get_checkout_order_received_url(),
+				],
+				200,
+				$order_id
+			);
 
 			} catch (\Exception $e) {
 
@@ -1504,6 +1196,62 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			}
 	}
 
+	/**
+	 * Price as plain text, e.g. "$90.00".
+	 *
+	 * @param float    $amount Amount.
+	 * @param WC_Order $order  Order supplying the currency.
+	 * @return string
+	 */
+	private function unified_plain_price($amount, $order) {
+
+		return html_entity_decode(
+			wp_strip_all_tags(wc_price($amount, ['currency' => $order->get_currency()])),
+			ENT_QUOTES,
+			'UTF-8'
+		);
+	}
+
+	/**
+	 * Order summary rows (items, then discounts/shipping/fees/tax) as plain text.
+	 *
+	 * @param WC_Order $order Order being paid.
+	 * @return array List of ['label' => string, 'value' => string].
+	 */
+	private function unified_get_summary_rows($order) {
+
+		$rows = [];
+
+		foreach ($order->get_items() as $item) {
+
+			$label = $item->get_name();
+
+			if ($item->get_quantity() > 1) {
+				$label .= ' ×' . $item->get_quantity();
+			}
+
+			$rows[] = [
+				'label' => $label,
+				'value' => $this->unified_plain_price($order->get_line_total($item, true), $order),
+			];
+		}
+
+		// The subtotal repeats the items above and the total gets its own row.
+		foreach ($order->get_order_item_totals() as $key => $total) {
+
+			if (in_array($key, ['cart_subtotal', 'payment_method', 'order_total'], true)) {
+				continue;
+			}
+
+			$rows[] = [
+				'label' => rtrim(wp_strip_all_tags($total['label']), ': '),
+				'value' => html_entity_decode(wp_strip_all_tags($total['value']), ENT_QUOTES, 'UTF-8'),
+			];
+		}
+
+		return $rows;
+	}
+
 	private function build_response(
 		string $result,
 		string $message = '',
@@ -1519,6 +1267,481 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			'code'     => $code,
 			'success'  => $result === 'success',
 		];
+	}
+
+	/**
+	 * Ask Unified to email the customer their voucher.
+	 *
+	 * The email is Unified's, not this plugin's: there is no template, no
+	 * wp_mail() call and no voucher link here. The order is posted to
+	 * /api/voucher/send and whatever comes back is handed to the checkout as it
+	 * is - including the wording of a refusal, which is already written for the
+	 * customer.
+	 *
+	 * The payment link is still created only when the customer opens the button
+	 * in that email; this call creates nothing but the voucher itself.
+	 *
+	 * @param WC_Order $order Order being paid.
+	 * @return array ['success' => bool, 'message' => string, 'data' => array]
+	 */
+	private function unified_request_voucher_email($order) {
+
+		$order_id   = $order->get_id();
+		$log_prefix = "[Order #{$order_id}]";
+
+		$accounts = $this->get_all_available_accounts();
+
+		if (empty($accounts)) {
+
+			Unified_Payment_Gateway_Logger::error(
+				$log_prefix . ' Voucher not requested: no eligible account',
+				['order_id' => $order_id]
+			);
+
+			return [
+				'success' => false,
+				'message' => __('No eligible payment provider available.', 'unified-payment-gateway'),
+				'data'    => [],
+			];
+		}
+
+		$selected_account = null;
+		$payment_data     = null;
+		$last_error_data  = null;
+
+		foreach ($accounts as $account) {
+
+			$public_key = $this->sandbox
+				? $account['sandbox_public_key']
+				: $account['live_public_key'];
+
+			$secret_key = $this->sandbox
+				? $account['sandbox_secret_key']
+				: $account['live_secret_key'];
+
+			// The same payload request-payment is given, so the voucher is raised
+			// for exactly the order the payment will be for.
+			$data = $this->unified_prepare_payment_data($order, $public_key, $secret_key);
+
+			if (is_array($data) && ($data['result'] ?? '') === 'fail') {
+				Unified_Payment_Gateway_Logger::warning(
+					$log_prefix . ' Account preparation failed',
+					[
+						'account_title' => $account['title'] ?? null,
+						'error'         => $data['error'] ?? null,
+					]
+				);
+				continue;
+			}
+
+			// --- START DAILY LIMIT CHECK ---
+			$limit_url = $this->get_api_url('/api/dailylimit');
+
+			$limit_resp = wp_remote_post($limit_url, [
+				'method'  => 'POST',
+				'timeout' => 30,
+				'body'    => $data,
+				'headers' => [
+					'Content-Type'  => 'application/x-www-form-urlencoded',
+					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
+				],
+			]);
+
+			if (is_wp_error($limit_resp)) {
+				Unified_Payment_Gateway_Logger::warning(
+					$log_prefix . ' Daily limit API WP error',
+					[
+						'account_title' => $account['title'] ?? null,
+						'error'         => $limit_resp->get_error_message(),
+					]
+				);
+				continue;
+			}
+
+			$limit_data = json_decode(wp_remote_retrieve_body($limit_resp), true);
+
+			if (($limit_data['status'] ?? '') === 'error') {
+				Unified_Payment_Gateway_Logger::warning(
+					$log_prefix . ' Account rejected by daily limit API',
+					[
+						'account_title' => $account['title'] ?? null,
+						'response'      => $limit_data,
+					]
+				);
+
+				$last_error_data = $limit_data;
+				continue;
+			}
+			// --- END DAILY LIMIT CHECK ---
+
+			Unified_Payment_Gateway_Logger::info(
+				$log_prefix . ' Account selected',
+				[
+					'account_title' => $account['title'] ?? null,
+				]
+			);
+
+			$selected_account = $account;
+			$payment_data     = $data;
+			break;
+		}
+
+		if (!$selected_account) {
+			if ($last_error_data) {
+				if (!empty($last_error_data['max_limit_reached'])) {
+					return [
+						'success' => false,
+						'message' => __('The transaction amount exceeds the maximum allowed limit.', 'unified-payment-gateway'),
+						'data'    => [],
+					];
+				}
+
+				$order->update_meta_data('_unified_limit_exceeded', true);
+				$order->save();
+
+				return [
+					'success' => false,
+					'message' => $last_error_data['message'] ?? __('Payment limit error.', 'unified-payment-gateway'),
+					'data'    => [],
+				];
+			}
+
+			return [
+				'success' => false,
+				'message' => __('No eligible payment provider available for this order', 'unified-payment-gateway'),
+				'data'    => [],
+			];
+		}
+
+		// What the customer actually bought, so the redemption page can show
+		// it back to them. Carried by the voucher only - request-payment
+		// neither wants nor keeps it.
+		$account       = $selected_account;
+		$data          = $payment_data;
+		$public_key    = $this->sandbox
+			? $account['sandbox_public_key']
+			: $account['live_public_key'];
+		$data['items'] = $this->unified_get_voucher_items($order);
+
+		/*
+		 * Which attempt this voucher is for. Without it the application keys
+		 * the voucher on the order number alone, so a retry of the same order
+		 * is treated as the merchant resending the first voucher and hands the
+		 * customer back the payment page of the attempt that already failed.
+		 *
+		 * meta_data.order_id is deliberately left as the plain order number:
+		 * that is what the application counts failed attempts against, and it
+		 * must stay the same across attempts for the limit to work.
+		 */
+		$data['reference'] = $this->unified_voucher_reference($order);
+
+		$api_url = esc_url($this->base_url . '/api/voucher/send');
+
+		$response = wp_remote_post($api_url, [
+			'method'    => 'POST',
+			'timeout'   => 30,
+			'body'      => $data,
+			'headers'   => [
+				'Content-Type'  => 'application/x-www-form-urlencoded',
+				'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
+			],
+			'sslverify' => true,
+		]);
+
+		if (is_wp_error($response)) {
+			Unified_Payment_Gateway_Logger::error(
+				$log_prefix . ' Voucher request failed to reach the API',
+				[
+					'order_id'      => $order_id,
+					'account_title' => $account['title'] ?? null,
+					'error'         => $response->get_error_message(),
+				]
+			);
+
+			return [
+				'success' => false,
+				'message' => __('We could not reach the voucher service. Please try again in a moment.', 'unified-payment-gateway'),
+				'data'    => [],
+			];
+		}
+
+		$code = (int) wp_remote_retrieve_response_code($response);
+		$body = json_decode(wp_remote_retrieve_body($response), true);
+		$body = is_array($body) ? $body : [];
+
+		$message = isset($body['message']) ? sanitize_text_field($body['message']) : '';
+
+		Unified_Payment_Gateway_Logger::info(
+			$log_prefix . ' Voucher API response received',
+			[
+				'order_id'   => $order_id,
+				'http_code'  => $code,
+				'status'     => $body['status'] ?? null,
+				'voucher_id' => $body['data']['voucher_id'] ?? null,
+				'reference'  => $body['data']['reference'] ?? null,
+			]
+		);
+
+		if (($body['status'] ?? '') === 'success') {
+			return [
+				'success' => true,
+				'message' => $message,
+				'data'    => isset($body['data']) && is_array($body['data']) ? $body['data'] : [],
+			];
+		}
+
+		return [
+			'success' => false,
+			'message' => $message ?: __('We could not email your voucher. Please try again in a moment.', 'unified-payment-gateway'),
+			'data'    => [],
+		];
+	}
+
+	/**
+	 * Voucher reference for the attempt about to be made.
+	 *
+	 * The application keeps one open voucher per (merchant, mode, reference)
+	 * and hands the existing one back when that key repeats, so a checkout
+	 * submitted twice resends a single voucher instead of racing two. Numbering
+	 * the attempt is what separates a genuine retry from such a resend.
+	 *
+	 * When retrying after a failed, expired, or cancelled payment, we ensure a new
+	 * attempt reference is generated so a fresh voucher and payment link are created.
+	 *
+	 * @param WC_Order $order Order being paid.
+	 * @return string
+	 */
+	private function unified_voucher_reference($order) {
+
+		$last_voucher_attempt = 0;
+		$prev_ref = (string) $order->get_meta('_unified_voucher_reference', true);
+		if ($prev_ref !== '') {
+			if (preg_match('/-(\d+)$/', $prev_ref, $matches)) {
+				$last_voucher_attempt = (int) $matches[1];
+			} else {
+				$last_voucher_attempt = 1;
+			}
+		}
+
+		$timeline_attempts = $this->unified_failed_attempts($order);
+
+		$next_attempt = max($last_voucher_attempt, $timeline_attempts) + 1;
+
+		return $order->get_id() . '-' . $next_attempt;
+	}
+
+	/**
+	 * Failed, expired, or cancelled payment attempts already made on this order.
+	 *
+	 * One per payment, never one per report: a failure arrives twice, once
+	 * from the webhook and once when the customer returns to the store, and
+	 * the timeline records both under the one payment token. Counting distinct
+	 * tokens is therefore counting attempts.
+	 *
+	 * This numbers the next voucher. Whether an attempt is allowed at all
+	 * is the application's decision, taken against its own record of the order.
+	 *
+	 * @param WC_Order $order Order being paid.
+	 * @return int
+	 */
+	private function unified_failed_attempts($order) {
+
+		$timeline = $order->get_meta('_unified_timeline', true);
+
+		if (!is_array($timeline)) {
+			return 0;
+		}
+
+		$tokens    = [];
+		$untokened = 0;
+
+		foreach ($timeline as $event) {
+
+			if (!is_array($event)) {
+				continue;
+			}
+
+			$type = strtolower(trim((string) ($event['type'] ?? '')));
+
+			if (!in_array($type, ['failed', 'expired', 'cancelled'], true)) {
+				continue;
+			}
+
+			$token = trim((string) ($event['payment_token'] ?? ''));
+
+			if ($token === '') {
+				// A failure/expiry reported without a token is still one attempt.
+				$untokened++;
+				continue;
+			}
+
+			$tokens[$token] = true;
+		}
+
+		return count($tokens) + $untokened;
+	}
+
+	/**
+	 * The ordered products, as this store lists them.
+	 *
+	 * Line items only - shipping, tax and discounts are the order's totals, not
+	 * what the customer picked. Prices are formatted here rather than sent raw
+	 * so the redemption page shows the same strings the customer saw at
+	 * checkout, in this store's currency and format, and each line carries its
+	 * product picture so the page shows what they were looking at.
+	 *
+	 * @param WC_Order $order Order being paid.
+	 * @return array List of ['name' => string, 'quantity' => int, 'total' => string, 'image' => string].
+	 */
+	private function unified_get_voucher_items($order) {
+
+		$items = [];
+
+		foreach ($order->get_items() as $item) {
+
+			$name = sanitize_text_field($item->get_name());
+
+			if ($name === '') {
+				continue;
+			}
+
+			$items[] = [
+				'name'     => $name,
+				'quantity' => max(1, (int) $item->get_quantity()),
+				// Line total including tax, matching the order-received summary.
+				'total'    => $this->unified_plain_price($order->get_line_total($item, true), $order),
+				'image'    => $this->unified_get_item_image_url($item),
+			];
+		}
+
+		return $items;
+	}
+
+	/**
+	 * Product picture for an order line.
+	 *
+	 * A variation often has no image of its own, in which case the parent
+	 * product's is the one the customer was shown on the product page. The
+	 * thumbnail size is used: this ends up in a 36px box, and the full-size
+	 * upload would be a slow way to fill it.
+	 *
+	 * @param WC_Order_Item $item Order line item.
+	 * @return string Absolute URL, or '' when the product has no image.
+	 */
+	private function unified_get_item_image_url($item) {
+
+		if (!method_exists($item, 'get_product')) {
+			return '';
+		}
+
+		$product = $item->get_product();
+
+		if (!$product) {
+			return '';
+		}
+
+		$image_id = $product->get_image_id();
+
+		if (!$image_id && $product->get_parent_id()) {
+
+			$parent = wc_get_product($product->get_parent_id());
+
+			if ($parent) {
+				$image_id = $parent->get_image_id();
+			}
+		}
+
+		if (!$image_id) {
+			return '';
+		}
+
+		$url = wp_get_attachment_image_url($image_id, 'woocommerce_thumbnail');
+
+		return $url ? esc_url_raw($url) : '';
+	}
+
+	/**
+	 * Note on the order that Unified has the voucher in hand.
+	 *
+	 * @param WC_Order $order   Order being paid.
+	 * @param array    $voucher data block from /api/voucher/send.
+	 * @return void
+	 */
+	private function unified_record_voucher_sent($order, $voucher) {
+
+		$reference = isset($voucher['reference']) ? sanitize_text_field($voucher['reference']) : '';
+		$to        = sanitize_email($voucher['customer_email'] ?? $order->get_billing_email());
+
+		// Read by the order-received notice to say payment is still to come.
+		$order->update_meta_data('_unified_voucher_emailed_at', time());
+
+		if (!empty($voucher['voucher_id'])) {
+			$order->update_meta_data('_unified_voucher_id', sanitize_text_field($voucher['voucher_id']));
+		}
+
+		if ($reference !== '') {
+			$order->update_meta_data('_unified_voucher_reference', $reference);
+		}
+
+		$order->update_meta_data('_unified_state', 'pending');
+
+		$order->add_order_note(
+			$reference !== ''
+				? sprintf(
+					/* translators: 1: customer email address, 2: voucher reference */
+					__('Unified voucher emailed to %1$s (reference %2$s).', 'unified-payment-gateway'),
+					$to,
+					$reference
+				)
+				: sprintf(
+					/* translators: %s: customer email address */
+					__('Unified voucher emailed to %s.', 'unified-payment-gateway'),
+					$to
+				)
+		);
+
+		$order->save();
+	}
+
+	/**
+	 * Mask an email address for display, e.g. "harry@example.com" → "ha•••@example.com".
+	 *
+	 * @param string $email Email address.
+	 * @return string
+	 */
+	private function unified_mask_email($email) {
+		$at = strrpos((string) $email, '@');
+
+		if ($at === false) {
+			return '';
+		}
+
+		$local   = substr($email, 0, $at);
+		$visible = min(2, max(1, mb_strlen($local) - 1));
+
+		return mb_substr($local, 0, $visible) . "\u{2022}\u{2022}\u{2022}" . substr($email, $at);
+	}
+
+	/**
+	 * Remind the customer on the order-received page that payment happens via the emailed voucher.
+	 *
+	 * @param int $order_id Order ID.
+	 */
+	public function unified_thankyou_payment_link_notice($order_id) {
+		$order = wc_get_order($order_id);
+
+		if (!$order || !$order->has_status('pending') || !$order->get_meta('_unified_voucher_emailed_at')) {
+			return;
+		}
+
+		printf(
+			'<p class="unified-thankyou-email-notice">%s</p>',
+			sprintf(
+				/* translators: %s: masked customer email address */
+				esc_html__('We have emailed your voucher to %s. Purchase the voucher to complete this order.', 'unified-payment-gateway'),
+				'<strong>' . esc_html($this->unified_mask_email($order->get_billing_email())) . '</strong>'
+			)
+		);
 	}
 
 	private function is_block_checkout_request() {
@@ -1541,7 +1764,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 
 		$clean = strtolower(preg_replace('/[^a-z0-9]/i', '', $address));
 
-		return preg_match('/pob|postalbox|postoffice/', $clean) === 1;
+		return preg_match('/pob|postoffice/', $clean) === 1;
 	}
 
 	private function unified_prepare_payment_data($order, $api_public_key, $api_secret) {
@@ -1563,22 +1786,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		$billing_postcode  = sanitize_text_field($order->get_billing_postcode());
 		$billing_country   = sanitize_text_field($order->get_billing_country());
 		$billing_state     = sanitize_text_field($order->get_billing_state());
-
-		if (strlen(trim($first_name)) < 3) {
-			wc_add_notice(__('First name must contain at least 3 characters.', 'unified-payment-gateway'), 'error');
-		}
-
-		if (strlen(trim($last_name)) < 3) {
-			wc_add_notice(__('Last name must contain at least 3 characters.', 'unified-payment-gateway'), 'error');
-		}
-
-		if (strlen(trim($billing_address_1)) < 5) {
-			wc_add_notice(__('Address must contain at least 5 characters.', 'unified-payment-gateway'), 'error');
-		}
-
-		if (strlen(trim($billing_city)) < 3) {
-			wc_add_notice(__('Please enter a valid city name (minimum 3 characters).', 'unified-payment-gateway'), 'error');
-		}
 
 		$redirect_url = esc_url_raw(add_query_arg([
 			'order_id' => $order_id,
@@ -1602,6 +1809,16 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			'amount'   => $amount,
 			'source'   => 'woocommerce',
 		]);
+
+		$user_id = $order->get_customer_id();
+		$is_guest = empty($user_id) ? 1 : 0;
+		if ($is_guest === 1 && !empty($email)) {
+			$existing_user = get_user_by('email', $email);
+			if ($existing_user) {
+				$is_guest = 0;
+				$user_id = $existing_user->ID;
+			}
+		}
 
 		return [
 			'api_secret'       => $api_secret,
@@ -1627,7 +1844,11 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			'billing_state'    => $billing_state,
 			'is_sandbox'       => $is_sandbox,
 			'curr_code'        => sanitize_text_field($order->get_currency()),
+			// Tells the application this order came from the unified plugin, which
+			// is what turns on its voucher pages (payment received, invoice).
 			'plugin_source'    => 'unified',
+			'is_guest'         => $is_guest,
+			'customer_user_id' => $user_id ? $user_id : 0,
 		];
 	}
 
@@ -1684,36 +1905,16 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 	}
 
 	private function unified_get_client_ip() {
-
-		if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
-			return sanitize_text_field($_SERVER['HTTP_CF_CONNECTING_IP']);
+		$ip = '';
+		if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
+			$ip = sanitize_text_field(wp_unslash($_SERVER['HTTP_CLIENT_IP']));
+		} elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+			$ip_list = explode(',', sanitize_text_field(wp_unslash($_SERVER['HTTP_X_FORWARDED_FOR'])));
+			$ip = trim($ip_list[0]);
+		} elseif (!empty($_SERVER['REMOTE_ADDR'])) {
+			$ip = sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR']));
 		}
-
-		if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
-			return sanitize_text_field($_SERVER['HTTP_X_REAL_IP']);
-		}
-
-		if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-			$ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-
-			foreach ($ips as $ip) {
-				$ip = trim($ip);
-
-				if (filter_var($ip, FILTER_VALIDATE_IP)) {
-					return sanitize_text_field($ip);
-				}
-			}
-		}
-
-		if (
-			!empty($_SERVER['REMOTE_ADDR']) &&
-			filter_var($_SERVER['REMOTE_ADDR'], FILTER_VALIDATE_IP) &&
-			$_SERVER['REMOTE_ADDR'] !== '0.0.0.0'
-		) {
-			return sanitize_text_field($_SERVER['REMOTE_ADDR']);
-		}
-
-		return '';
+		return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '0.0.0.0';
 	}
 
 	public function unified_add_custom_label_to_order_row($line_items, $order) {
@@ -1725,7 +1926,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 	}
 
 	public function unified_woocommerce_not_active_notice() {
-		echo '<div class="error"><p>' . esc_html__('Unified Payment Gateway requires WooCommerce to be installed and active.', 'unified-payment-gateway') . '</p></div>';
+		echo '<div class="error"><p>' . esc_html__('Voucher Pay requires WooCommerce to be installed and active.', 'unified-payment-gateway') . '</p></div>';
 	}
 
 	public function payment_fields() {
@@ -1754,73 +1955,7 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		}
 	}
 
-	/**
-	 * Restricted states where Unified payment gateway should be hidden.
-	 *
-	 * @return array
-	 */
-	private function get_restricted_states() {
-		return array( 'NY', 'AK' , 'MN');
-	}
-
-	/**
-	 * Check if current customer state is restricted.
-	 *
-	 * @return bool
-	 */
-	private function is_restricted_state() {
-
-		$restricted_states = $this->get_restricted_states();
-
-		$billing_state  = '';
-		$shipping_state = '';
-
-		// Checkout posted data (AJAX checkout updates)
-		if ( isset( $_POST['post_data'] ) ) {
-			parse_str( wp_unslash( $_POST['post_data'] ), $posted_data );
-
-			$billing_state  = isset( $posted_data['billing_state'] ) ? wc_clean( $posted_data['billing_state'] ) : '';
-			$shipping_state = isset( $posted_data['shipping_state'] ) ? wc_clean( $posted_data['shipping_state'] ) : '';
-		} else {
-
-			// Standard checkout/customer session
-			$customer = WC()->customer;
-
-			if ( $customer ) {
-				$billing_state  = $customer->get_billing_state();
-				$shipping_state = $customer->get_shipping_state();
-			}
-
-			// Direct POST fallback
-			if ( isset( $_POST['billing_state'] ) ) {
-				$billing_state = wc_clean( wp_unslash( $_POST['billing_state'] ) );
-			}
-
-			if ( isset( $_POST['shipping_state'] ) ) {
-				$shipping_state = wc_clean( wp_unslash( $_POST['shipping_state'] ) );
-			}
-		}
-
-		$billing_state  = strtoupper( trim( $billing_state ) );
-		$shipping_state = strtoupper( trim( $shipping_state ) );
-
-		return (
-			in_array( $billing_state, $restricted_states, true ) ||
-			in_array( $shipping_state, $restricted_states, true )
-		);
-	}
-
 	public function validate_fields() {
-		if (!$this->check_for_sql_injection()) return false;
-
-		/**
-		 * Block restricted states.
-		 * Prevent direct checkout submission even if gateway is forced.
-		 */
-		if ( $this->is_restricted_state() ) {
-			wc_add_notice(__('Unified payment is not available in your state.', 'unified-payment-gateway'), 'error');
-			return false;
-		}
 
 		if ($this->get_option('show_consent_checkbox') === 'yes') {
 			$nonce = isset($_POST['unified_nonce']) ? sanitize_text_field(wp_unslash($_POST['unified_nonce'])) : '';
@@ -1840,8 +1975,9 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 	public function unified_enqueue_styles_and_scripts() {
 		if (is_checkout()) {
 			$image_url = plugin_dir_url(dirname(__FILE__)) . 'assets/images/loader.gif';
-			wp_enqueue_style('unified-payment-loader-styles', plugins_url('../assets/css/unified-frontend.css', __FILE__), [], '1.0', 'all');
-			wp_enqueue_script('unified-js', plugins_url('../assets/js/unified.js', __FILE__), ['jquery'], '1.0', true);
+			// filemtime versions so browsers and page caches drop the old popup script.
+			wp_enqueue_style('unified-payment-loader-styles', plugins_url('../assets/css/unified-frontend.css', __FILE__), [], filemtime(plugin_dir_path(__FILE__) . '../assets/css/unified-frontend.css'), 'all');
+			wp_enqueue_script('unified-js', plugins_url('../assets/js/unified.js', __FILE__), ['jquery'], filemtime(plugin_dir_path(__FILE__) . '../assets/js/unified.js'), true);
 			wp_localize_script('unified-js', 'unified_params', [
 				'ajax_url'       => admin_url('admin-ajax.php'),
 				'checkout_url'   => wc_get_checkout_url(),
@@ -1904,23 +2040,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		}
 
 		// =====================================================
-		// STEP 3A: RESTRICTED STATES CHECK
-		// =====================================================
-		if ( $this->is_restricted_state() ) {
-
-			Unified_Payment_Gateway_Logger::info(
-				'Unified Gateway Decision',
-				[
-					'result' => 'HIDDEN',
-					'reason' => 'Restricted billing/shipping state',
-					'flow'   => $flow,
-				]
-			);
-
-			return $this->hide_gateway( $available_gateways, $gateway_id );
-		}
-
-		// =====================================================
 		// STEP 4: CART INFO
 		// =====================================================
 		$amount = (float) WC()->cart->get_total('raw');
@@ -1962,12 +2081,48 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		// STEP 7: NO ACCOUNTS
 		// =====================================================
 		if (empty($accounts)) {
+			$submitted_gateway = isset($_POST['payment_method'])
+				? wc_clean(wp_unslash($_POST['payment_method']))
+				: '';
+
+			if (
+				$submitted_gateway !== $gateway_id
+				&& $is_blocks
+				&& function_exists('rest_get_server')
+			) {
+				$rest_server  = rest_get_server();
+				$rest_request = is_object($rest_server) && method_exists($rest_server, 'get_current_request')
+					? $rest_server->get_current_request()
+					: null;
+				if (is_object($rest_request) && method_exists($rest_request, 'get_param')) {
+					$submitted_gateway = wc_clean((string) $rest_request->get_param('payment_method'));
+				}
+			}
+
+			if (
+				$submitted_gateway === $gateway_id
+				&& isset($available_gateways[$gateway_id])
+			) {
+				Unified_Payment_Gateway_Logger::info(
+					"Unified Gateway Decision",
+					[
+						'result' => 'RETAINED_FOR_SUBMISSION',
+						'reason' => 'No active merchant accounts',
+						'items'  => $items,
+						'total'  => $amount,
+						'flow'   => $flow
+					]
+				);
+
+				// Let the payment handler return its actionable no-active-account error.
+				return $available_gateways;
+			}
 
 			Unified_Payment_Gateway_Logger::info(
 				"Unified Gateway Decision",
 				[
 					'result' => 'HIDDEN',
-					'reason' => 'No merchant accounts configured',
+					'reason' => 'No active merchant accounts',
 					'items'  => $items,
 					'total'  => $amount,
 					'flow'   => $flow
@@ -2088,21 +2243,6 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			return $this->hide_gateway($available_gateways, $gateway_id);
 		}
 
-		if (!empty($available_gateways[$gateway_id]) && is_object($available_gateways[$gateway_id])) {
-			$display_title = !empty($selected['checkout_title'])
-				? $selected['checkout_title']
-				: ($selected['title'] ?? '');
-
-			if (!empty($display_title)) {
-				$available_gateways[$gateway_id]->title = sanitize_text_field($display_title);
-			}
-
-			if (!empty($selected['checkout_subtitle'])) {
-				$available_gateways[$gateway_id]->description = sanitize_textarea_field($selected['checkout_subtitle']);
-			}
-		}
-
-
 		return $available_gateways;
 	}
 	private function send_plugin_logs($accounts, $public_key, $secret_key, $amount, $gateway_loaded, $pluginLogApiUrl, $force_refresh)
@@ -2112,16 +2252,11 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		$group_id       = get_option('unified_group_id');
 		$cache_base     = 'unified_daily_limit_' . md5($public_key . $amount);
 
-		global $wp_version;
-
 		$plugin_logs_data = [
 			'valid_accounts' => $accounts,
 			'gateway_loaded' => $gateway_loaded,
 			'plugin_status'  => $gateway_loaded,
 			'plugin_version' => $plugin_version,
-			'wordpress_version'     => $wp_version,
-			'woocommerce_version'   => class_exists('WooCommerce') ? WC()->version : null,
-			'woocommerce_db_version'=> get_option('woocommerce_db_version'),
 			'api_public_key' => $public_key,
 			'api_secret_key' => $secret_key,
 			'is_sandbox'     => $this->sandbox,
@@ -2294,6 +2429,11 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 		return $valid_accounts;
 	}
 
+	function unified_enqueue_admin_styles($hook) {
+		if (strpos($hook, 'woocommerce') === false) return;
+		wp_enqueue_style('unified-admin-style', plugins_url('../assets/css/unified-admin.css', __FILE__), [], '1.0.0');
+	}
+
 	private function send_account_switch_email($oldAccount, $newAccount) {
 		$btyenftApiUrl = $this->get_api_url('/api/switch-account-email');
 		$api_key       = $this->sandbox ? $oldAccount['sandbox_public_key'] : $oldAccount['live_public_key'];
@@ -2414,10 +2554,6 @@ private function get_routing_sorted_accounts(array $accounts): array {
 			if (($limit_data['status'] ?? '') === 'success') {
 				$eligible_accounts[] = $account;
 			} else {
-				$this->log_info_once_per_session('skip_limit_' . $acc_title, "Skipping '{$acc_title}': daily limit exceeded", [
-					'response_status' => $limit_data['status'] ?? 'unknown',
-					'message' => $limit_data['message'] ?? '',
-				]);
 				continue;
 			}
 			if (!empty($limit_data['status']) && $limit_data['status'] === 'success') {
@@ -2578,39 +2714,5 @@ private function get_routing_sorted_accounts(array $accounts): array {
 
 	private function release_lock($lock_key) {
 		delete_option($lock_key);
-	}
-
-	function check_for_sql_injection() {
-		$sql_injection_patterns = [
-			'/\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b(?![^{}]*})/i',
-			'/(\-\-|\/\*|\*\/)/i',
-			'/(\b(AND|OR)\b\s*\d+\s*[=<>])/i',
-		];
-		$errors = [];
-		$checkout_fields = WC()->checkout()->get_checkout_fields();
-		// phpcs:ignore WordPress.Security.NonceVerification.Missing
-		foreach ($_POST as $key => $value) {
-			if (is_string($value)) {
-				foreach ($sql_injection_patterns as $pattern) {
-					if (preg_match($pattern, $value)) {
-						$field_label = isset($checkout_fields['billing'][$key]['label'])
-							? $checkout_fields['billing'][$key]['label']
-							: (isset($checkout_fields['shipping'][$key]['label'])
-								? $checkout_fields['shipping'][$key]['label']
-								: ucfirst(str_replace('_', ' ', $key)));
-						$ip_address = sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'] ?? ''));
-						wc_get_logger()->info("SecurityCheck | Potential SQL Injection | Field: {$field_label}, IP: {$ip_address}", ['source' => 'unified-payment-gateway']);
-						/* translators: %s is the field label. */
-						$errors[] = sprintf(esc_html__('Please enter a valid "%s".', 'unified-payment-gateway'), $field_label);
-						break;
-					}
-				}
-			}
-		}
-		if (!empty($errors)) {
-			foreach ($errors as $error) wc_add_notice($error, 'error');
-			return false;
-		}
-		return true;
 	}
 }

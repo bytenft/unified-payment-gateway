@@ -1,7 +1,7 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
-class UNIFIED_PAYMENT_ENGINE
+class Unified_Payment_State_Engine
 {
     const LOCK_TTL  = 12;
     const EVENT_TTL = 86400;
@@ -153,7 +153,9 @@ class UNIFIED_PAYMENT_ENGINE
      * ========================================================= */
     private static function apply($order, $state, $event_type, $payload)
     {
-        if (self::get_state($order) === 'success') { return; }
+        if (self::get_state($order) === 'success') {
+            return;
+        }
 
         $order_id = $order->get_id();
         $payment_token = $payload['payment_token'] ?? '';
@@ -169,7 +171,18 @@ class UNIFIED_PAYMENT_ENGINE
 
         $order->update_meta_data('_unified_state_lock', $state_lock_key);
 
-        // Always save engine state
+        $wc_status = match ($state) {
+            'success'    => self::get_success_wc_status(),
+            'failed'     => 'failed',
+            'cancelled'  => 'cancelled',
+            'expired'    => 'failed',
+            default      => null
+        };
+
+        if (!$wc_status) return;
+
+        $order->update_status($wc_status, '');
+
         $order->update_meta_data('_unified_state', $state);
         $order->update_meta_data('_unified_last_event', $event_type);
         $order->update_meta_data('_unified_last_event_time', current_time('mysql'));
@@ -182,24 +195,15 @@ class UNIFIED_PAYMENT_ENGINE
             $order->update_meta_data('_unified_payment_success', 'yes');
         }
 
-        $wc_status = match ($state) {
-            'success'    => self::get_success_wc_status(),
-            'failed'     => 'failed',
-            'cancelled'  => 'cancelled',
-            'expired'    => 'failed',
-            default      => null
-        };
-
-        if ($wc_status) {
-            $order->update_status($wc_status, '');
-        }
-
         $order->save();
     }
 
     private static function get_timeline($order)
     {
         $data = $order->get_meta('_unified_timeline', true);
+        if (empty($data)) {
+            $data = $order->get_meta('_unified_timeline', true);
+        }
 
         if (empty($data)) {
             return [];
@@ -279,7 +283,7 @@ class UNIFIED_PAYMENT_ENGINE
         /**
          * FAILED NOTES
          */
-        $already_synced = (int) $order->get_meta('_unified_failed_note_count');
+        $already_synced = (int) ($order->get_meta('_unified_failed_note_count') ?: $order->get_meta('_unified_failed_note_count'));
 
         $actual_failed_count = count($failed_events);
 
@@ -311,6 +315,7 @@ class UNIFIED_PAYMENT_ENGINE
          */
         if (
             $success_event &&
+            !$order->get_meta('_unified_success_note_added') &&
             !$order->get_meta('_unified_success_note_added')
         ) {
 
@@ -333,6 +338,7 @@ class UNIFIED_PAYMENT_ENGINE
          */
         if (
             $cancel_event &&
+            !$order->get_meta('_unified_cancel_note_added') &&
             !$order->get_meta('_unified_cancel_note_added')
         ) {
 
@@ -374,7 +380,7 @@ class UNIFIED_PAYMENT_ENGINE
         }
 
         return sprintf(
-            '<strong>Unified Gateway</strong><br><br>
+            '<strong>Voucher Pay</strong><br><br>
             <strong>%s</strong><br><br>
             <strong>Payment ID:</strong> %s<br>
             <strong>Updated Via:</strong> %s<br>
@@ -396,6 +402,8 @@ class UNIFIED_PAYMENT_ENGINE
             ?? $payload['transaction_status']
             ?? $payload['order_status']
             ?? null;
+
+        $status = $status ? strtolower((string)$status) : null;
 
         return match ($status) {
             'success', 'paid', 'completed'  => 'success',
@@ -425,13 +433,13 @@ class UNIFIED_PAYMENT_ENGINE
     private static function can_transition($from, $to)
     {
         if ($from === 'success') return false;
+        if ($from === 'processing') return false;
 
         $map = [
-            'pending' => ['processing','cancelled','success','failed'],
+            'pending' => ['cancelled','processing','success','failed'],
             'failed' => ['failed','success','processing','cancelled'],
             'cancelled' => ['success','failed'],
-            'expired' => ['failed','cancelled','success'],
-            'processing' => ['success', 'failed', 'cancelled', 'expired'],
+            'expired' => ['failed','cancelled','processing','success'],
         ];
 
         return in_array($to, $map[$from] ?? [], true);
@@ -442,15 +450,7 @@ class UNIFIED_PAYMENT_ENGINE
      * ========================================================= */
     private static function get_state($order)
     {
-        // Get the merchant's chosen success status from settings (processing or completed)
-        $success_wc_status = self::get_success_wc_status();
-        
-        // If WooCommerce is already sitting on the successful status, force 'success' state
-        if ($order->has_status([$success_wc_status, 'processing', 'completed'])) {
-            return 'success';
-        }
-
-        return $order->get_meta('_unified_state') ?: 'pending';
+        return $order->get_meta('_unified_state') ?: $order->get_meta('_unified_state') ?: 'pending';
     }
 
     /* =========================================================
@@ -459,6 +459,9 @@ class UNIFIED_PAYMENT_ENGINE
     private static function get_success_wc_status()
     {
         $settings = get_option('woocommerce_unified_settings', []);
+        if (empty($settings)) {
+            $settings = get_option('woocommerce_unified_settings', []);
+        }
         $status = $settings['order_status'] ?? 'processing';
 
         return in_array($status, ['processing','completed'], true)
@@ -504,7 +507,7 @@ class UNIFIED_PAYMENT_ENGINE
     public static function resolve_final_state($order, $api_status = null)
     {
         // 1. PRIMARY: engine state (validated)
-        $state = $order->get_meta('_unified_state');
+        $state = self::get_state($order);
 
         if (!empty($state) && in_array($state, ['pending','processing','success','failed','cancelled','expired'], true)) {
             return $state;
@@ -512,7 +515,7 @@ class UNIFIED_PAYMENT_ENGINE
 
         // 2. SAFETY: API status (current response)
         if (!empty($api_status)) {
-            $mapped = match ($api_status) {
+            $mapped = match (strtolower((string)$api_status)) {
                 'success', 'paid', 'completed' => 'success',
                 'failed' => 'failed',
                 'cancelled', 'canceled' => 'cancelled',

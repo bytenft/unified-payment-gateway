@@ -10,7 +10,7 @@ console.log('unified-blocks.js loaded at', new Date().toISOString());
     const settings =
         window.wc?.wcSettings?.getPaymentMethodData?.('unified') || {};
 
-    const label = settings.title || 'Unified';
+    const label = settings.title || 'Voucher Pay';
     const description = settings.description || '';
 
     const methodConfig = {
@@ -38,7 +38,7 @@ console.log('unified-blocks.js loaded at', new Date().toISOString());
             features: settings.supports || ['products'],
         },
     };
-    if(settings.title){
+    if(settings.title && settings.isActive){
         console.log(settings.title);
         registerPaymentMethod(methodConfig);
     }

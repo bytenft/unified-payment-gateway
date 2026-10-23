@@ -82,3 +82,242 @@
     border-color: #df1b41 !important;
     box-shadow: 0 0 0 1px #df1b41 !important;
 }
+
+#unified-checkout-errors {
+    margin-bottom: 16px;
+}
+
+#unified-checkout-errors .wc-block-components-notice-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+}
+
+#unified-checkout-errors .wc-block-components-notice-banner.is-error {
+    background-color: #fff5f5;
+    border: 1px solid #cc1818;
+    color: #cc1818;
+}
+
+#unified-checkout-errors 
+.wc-block-components-notice-banner__content {
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+#unified-checkout-errors .wc-block-components-notice-banner__icon {
+    width: 20px !important;
+    height: 20px !important;
+    min-width: 20px !important;
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+#unified-checkout-errors .wc-block-components-notice-banner__icon svg {
+    width: 20px;
+    height: 20px;
+}
+
+#unified-checkout-errors .wc-block-components-notice-banner__content {
+    flex: 1;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+/* "Order received" card shown after Place Order */
+.unified-order-received {
+    box-sizing: border-box;
+    max-width: 560px;
+    margin: 40px auto;
+    padding: 36px 32px;
+    background: #fff;
+    border: 1px solid #e3e8f0;
+    border-radius: 10px;
+    text-align: center;
+    color: #475569;
+}
+
+.unified-order-received:focus {
+    outline: none;
+}
+
+.unified-order-received * {
+    box-sizing: border-box;
+}
+
+.unified-order-received__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 18px;
+    border-radius: 50%;
+    background: #e8f0fe;
+    color: #2563eb;
+}
+
+.unified-order-received__icon svg {
+    width: 20px;
+    height: 20px;
+}
+
+.unified-order-received__title {
+    margin: 0 0 14px;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.25;
+    color: #1e293b;
+}
+
+.unified-order-received__status {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.6;
+    color: #15803d;
+}
+
+.unified-order-received__lead {
+    margin: 0 0 24px;
+    font-size: 14px;
+    line-height: 1.7;
+}
+
+.unified-order-received__summary {
+    padding: 18px 20px;
+    margin-bottom: 18px;
+    background: #f5f8fc;
+    border-radius: 8px;
+    text-align: left;
+}
+
+.unified-order-received__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 7px 0;
+    font-size: 14px;
+    color: #475569;
+}
+
+.unified-order-received__row span:last-child {
+    color: #1e293b;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+.unified-order-received__row--total {
+    margin-top: 6px;
+    padding-top: 14px;
+    border-top: 1px solid #e3e8f0;
+    font-size: 17px;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.unified-order-received__note {
+    display: flex;
+    gap: 12px;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+    background: #f5f8fc;
+    border-radius: 8px;
+    text-align: left;
+}
+
+.unified-order-received__note-icon {
+    flex: 0 0 auto;
+    color: #2563eb;
+}
+
+.unified-order-received__note-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.unified-order-received__note p {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+
+.unified-order-received .unified-order-received__note-title {
+    margin-bottom: 4px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+/* Scoped to the card so theme paragraph margins (.entry-content p) don't win */
+.unified-order-received .unified-order-received__foot {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: #94a3b8;
+}
+
+.unified-order-received .unified-order-received__foot strong {
+    color: #64748b;
+    overflow-wrap: anywhere;
+}
+
+/* "Not receiving the email? Click here" - the email's button, in a new tab */
+.unified-order-received .unified-order-received__link {
+    margin: 10px 0 0;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: #64748b;
+}
+
+.unified-order-received .unified-order-received__link-anchor {
+    color: #2563eb;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.unified-order-received .unified-order-received__link-anchor:hover,
+.unified-order-received .unified-order-received__link-anchor:focus {
+    color: #1d4ed8;
+}
+
+.unified-order-received .unified-order-received__link-anchor:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.unified-order-received__link-icon {
+    display: inline-block;
+    margin-left: 3px;
+    vertical-align: -1px;
+}
+
+.unified-order-received__link-icon svg {
+    display: block;
+    width: 12px;
+    height: 12px;
+}
+
+.unified-order-received__sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.unified-thankyou-email-notice {
+    padding: 14px 18px;
+    background: #f5f8fc;
+    border-left: 3px solid #2563eb;
+    border-radius: 4px;
+}
