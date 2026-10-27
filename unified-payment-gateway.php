@@ -4,10 +4,10 @@
  * Plugin Name: Voucher Pay
  * Description: Purchase and pay quickly with a voucher
  * Author: Unified
- * Author URI: https://rt.app/
+ * Author URI: https://pay.bytenft.xyz/
  * Text Domain: unified-payment-gateway
  * Plugin URI: https://github.com/bytenft/unified-payment-gateway
- * Version: 1.0.3
+ * Version: 1.0.30
  * License: GPLv3 or later
  * License URI: https://www.gnu.org/licenses/gpl-3.0.html
  *

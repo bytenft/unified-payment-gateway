@@ -8,7 +8,7 @@ The Voucher Pay plugin for WooCommerce 8.9+ allows you to accept fiat payments t
 **Tags:** woocommerce, payment gateway, fiat, Unified  
 **Requires at least:** 6.2  
 **Tested up to:** 6.9  
-**Stable tag:** 1.0.3  
+**Stable tag:** 1.0.30  
 **License:** GPLv3 or later  
 **License URI:** [GPLv3 License](https://www.gnu.org/licenses/gpl-3.0.html)
 
@@ -33,7 +33,7 @@ For any issues or enhancement requests with this plugin, please contact the Unif
 
 ## 1. Download Plugin from GitHub
 
-- Visit the GitHub repository for the Voucher Pay plugin at [GitHub Repository URL](https://github.com/voucher/unified-payment-gateway).
+- Visit the GitHub repository for the Voucher Pay plugin at [GitHub Repository URL](https://github.com/bytenft/unified-payment-gateway).
 - Download the plugin ZIP file to your local machine.
 
 ## 2. Install the Plugin in WordPress
@@ -138,36 +138,20 @@ For any issues or enhancement requests with this plugin, please contact the Unif
 
 ## Documentation
 
-The official documentation for this plugin is available at: [https://qa-rt.unified.xyz/docs/wordpress-plugin](https://qa-rt.unified.xyz/docs/wordpress-plugin)
+The official documentation for this plugin is available at: [https://pay.bytenft.xyz/docs/wordpress-plugin](https://pay.bytenft.xyz/docs/wordpress-plugin)
 
 ## Changelog
 
-### Version 1.0.3
+### Version 1.0.30
 
 - **Voucher Checkout:** Placing an order now emails the customer a redeemable voucher, and the payment page opens only when they use it. No payment link is opened during checkout.
 - **Order Confirmation:** The order confirmation shown at checkout now includes the voucher reference and the products ordered.
 - **Order Items:** Ordered products, with their images, are sent with the voucher so customers can see what they are paying for.
 - **Account Settings:** Fixed payment account settings not being read consistently across the plugin.
 
-### Version 1.0.2
-- Failed Payment Redirect: Improved the failed payment flow by redirecting customers back to the checkout page without displaying a duplicate payment failure notice, preventing redundant error messages.
-- PO Box Validation: Expanded PO Box detection to support additional address variations such as `POB`, `Postal Box`, and `Post Office Box`.
-- Address Validation: Added enhanced billing address validation by enforcing a minimum length of 5 characters and preventing numeric-only address entries to reduce invalid or incomplete address submissions during checkout.
-
-### Version 1.0.1
-
-- **Mobile Number Validation:** Resolved issues with mobile number validation during checkout.
-- **ZIP/Postal Code Validation:** Fixed ZIP/postal code validation to accept valid customer inputs.
-- **PO Box Validation:** Corrected PO Box address validation to improve address verification.
-- **Invalid API Key Handling:** Fixed invalid API key validation and improved error handling for better reliability.
-
-### Version 1.0.0 (Initial Release)
-
-- **Initial Release:** Launched the Voucher Pay plugin with core payment integration functionality for WooCommerce.
-
 ## Support
 
-For customer support, visit: [https://rt.app/contact-us](https://rt.app/contact-us)
+For customer support, visit: [https://pay.bytenft.xyz/contact-us](https://pay.bytenft.xyz/contact-us)
 
 ## Why Choose Voucher Pay?
 
