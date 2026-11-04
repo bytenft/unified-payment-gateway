@@ -1679,6 +1679,25 @@ class UNIFIED_PAYMENT_GATEWAY extends WC_Payment_Gateway_CC
 			$order->update_meta_data('_unified_voucher_id', sanitize_text_field($voucher['voucher_id']));
 		}
 
+		$purchase_url = '';
+		if (!empty($voucher['purchase_url'])) {
+			$purchase_url = esc_url_raw($voucher['purchase_url']);
+			$order->update_meta_data('_unified_voucher_purchase_url', $purchase_url);
+		} elseif (!empty($voucher['data']['purchase_url'])) {
+			$purchase_url = esc_url_raw($voucher['data']['purchase_url']);
+			$order->update_meta_data('_unified_voucher_purchase_url', $purchase_url);
+		}
+
+		// Clear any old pay_id from an earlier attempt so it does not mask the new voucher
+		$order->delete_meta_data('_unified_pay_id');
+		if (!empty($purchase_url) && class_exists('Unified_Payment_Gateway_Loader')) {
+			$loader = Unified_Payment_Gateway_Loader::get_instance();
+			$new_pay_id = $loader->resolve_pay_id_from_purchase_url($purchase_url);
+			if (!empty($new_pay_id)) {
+				$order->update_meta_data('_unified_pay_id', $new_pay_id);
+			}
+		}
+
 		if ($reference !== '') {
 			$order->update_meta_data('_unified_voucher_reference', $reference);
 		}

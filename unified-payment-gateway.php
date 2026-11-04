@@ -73,6 +73,20 @@ add_filter('woocommerce_get_checkout_order_received_url', function($url, $order)
     $is_valid = in_array($wc_status, ['processing', 'completed'], true) || $success_meta === 'yes' || $engine_state === 'success';
 
 	if (!$is_valid) {
+		$loader = UNIFIED_PAYMENT_GATEWAY_Loader::get_instance();
+		if (method_exists($loader, 'sync_single_order_status')) {
+			$sync_result = $loader->sync_single_order_status($order);
+			if ($sync_result === 'success') {
+				$order = wc_get_order($order->get_id());
+				$wc_status    = $order->get_status();
+				$engine_state = $order->get_meta('_unified_state');
+				$success_meta = $order->get_meta('_unified_payment_success');
+				$is_valid     = in_array($wc_status, ['processing', 'completed'], true) || $success_meta === 'yes' || $engine_state === 'success';
+			}
+		}
+	}
+
+	if (!$is_valid) {
 		Unified_Payment_Gateway_Logger::info(
 			sprintf(
 				'[Order #%d] ThankYou Filter BLOCKED -> %s',
