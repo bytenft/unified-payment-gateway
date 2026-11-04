@@ -55,6 +55,15 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		add_action('wp_ajax_unified_manual_sync', [$this, 'unified_manual_sync_callback']);
 		add_filter('cron_schedules', [$this, 'unified_add_cron_interval']);
 		add_action('unified_cron_event', [$this, 'handle_cron_event']);
+		add_action('unified_sync_pending_orders_event', [$this, 'sync_pending_orders']);
+		add_action('woocommerce_admin_order_data_after_order_details', [$this, 'unified_admin_order_sync_on_view']);
+		add_filter('woocommerce_order_actions', [$this, 'unified_add_order_actions']);
+		add_action('woocommerce_order_action_unified_check_status', [$this, 'unified_process_order_action_check_status']);
+		add_action('current_screen', [$this, 'unified_admin_orders_screen_sync']);
+		add_action('manage_woocommerce_page_wc-orders_custom_column', [$this, 'unified_admin_order_row_sync'], 10, 2);
+		add_action('manage_shop_order_posts_custom_column', [$this, 'unified_admin_order_row_sync_posts'], 10, 2);
+		add_action('woocommerce_thankyou', [$this, 'unified_customer_order_sync']);
+		add_action('woocommerce_view_order', [$this, 'unified_customer_order_sync']);
 		add_action('wp_ajax_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
 		add_action('wp_ajax_nopriv_unified_block_gateway_process', [$this,'handle_unified_gateway_ajax']);
 		add_action('wp', function () {
@@ -543,6 +552,21 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			: '';
 
 		$log_prefix = "[Order #{$order_id}]";
+		
+		// First attempt complete sync including voucher resolution if needed
+		$sync_res = $this->sync_single_order_status($order);
+		if ($sync_res) {
+			$fresh_order = wc_get_order($order_id);
+			$is_paid = in_array($fresh_order->get_status(), ['processing', 'completed'], true) || $sync_res === 'success';
+			if ($is_paid) {
+				wp_send_json_success([
+					'message'  => 'Payment confirmed successfully.',
+					'redirect' => $fresh_order->get_checkout_order_received_url(),
+					'status'   => $fresh_order->get_status(),
+				]);
+				wp_die();
+			}
+		}
 
 		// -------------------------
 		// SECURITY CHECK (NONCE OR ORDER KEY)
@@ -599,7 +623,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 					'Content-Type'  => 'application/json',
 					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
 				],
-				'timeout' => 15,
+				'timeout' => 8,
 			]
 		);
 
@@ -735,6 +759,21 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 			: '';
 
 		$log_prefix = "[Order #{$order_id}]";
+		
+		// First attempt complete sync including voucher resolution if needed
+		$sync_res = $this->sync_single_order_status($order);
+		if ($sync_res) {
+			$fresh_order = wc_get_order($order_id);
+			$is_paid = in_array($fresh_order->get_status(), ['processing', 'completed'], true) || $sync_res === 'success';
+			if ($is_paid) {
+				wp_send_json_success([
+					'message'  => 'Payment confirmed successfully.',
+					'redirect' => $fresh_order->get_checkout_order_received_url(),
+					'status'   => $fresh_order->get_status(),
+				]);
+				wp_die();
+			}
+		}
 
 		// -------------------------
 		// ORDER CHECK
@@ -812,7 +851,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 					'Content-Type'  => 'application/json',
 					'Authorization' => 'Bearer ' . sanitize_text_field($public_key),
 				],
-				'timeout' => 15,
+				'timeout' => 8,
 			]
 		);
 
@@ -969,6 +1008,14 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
      */
 	public function unified_add_cron_interval($schedules)
 	{
+		$schedules['every_five_minutes'] = array(
+			'interval' => 5 * 60,
+			'display'  => __('Every Five Minutes', 'unified-payment-gateway')
+		);
+		$schedules['every_fifteen_minutes'] = array(
+			'interval' => 15 * 60,
+			'display'  => __('Every Fifteen Minutes', 'unified-payment-gateway')
+		);
 		$schedules['every_two_hours'] = array(
 			'interval' => 2 * 60 * 60, // 2 hours in seconds = 7200
 			'display'  => __('Every Two Hours', 'unified-payment-gateway')
@@ -987,7 +1034,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 		}
 
 		// Schedule with new interval
-		wp_schedule_event(time(), 'every_two_hours', 'unified_cron_event');
+		wp_schedule_event(time(), 'every_five_minutes', 'unified_cron_event');
 	}
 
 	function deactivate_cron_job()
@@ -1000,6 +1047,9 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 	public function handle_cron_event()
 	{
 		$logger_context = ['source' => 'unified-payment-gateway'];
+		
+		// 1. Sync pending orders with the remote payment API
+		$this->sync_pending_orders();
 
 		$accounts = get_option('woocommerce_unified_payment_gateway_accounts');
 		if (empty($accounts)) {
@@ -1051,7 +1101,7 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				'Content-Type'  => 'application/json',
 			],
 			'body' => json_encode(['accounts' => $accountsData]),
-			'timeout' => 15,
+			'timeout' => 8,
 		]);
 
 		if (is_wp_error($response)) {
@@ -1271,5 +1321,441 @@ class UNIFIED_PAYMENT_GATEWAY_Loader
 				],
 			]
 		);
+	}
+
+	/**
+	 * Sync pending and on-hold Unified orders with the remote payment API.
+	 *
+	 * @param int $limit Max number of pending orders to check per run.
+	 * @return array Summary of synced order statuses.
+	 */
+	public function sync_pending_orders($limit = 20)
+	{
+		if (!function_exists('wc_get_orders')) {
+			return [];
+		}
+		$orders = wc_get_orders([
+			'status'         => ['pending', 'on-hold'],
+			'payment_method' => 'unified',
+			'limit'          => absint($limit),
+			'orderby'        => 'date',
+			'order'          => 'DESC',
+		]);
+		$synced = [];
+		if (!empty($orders) && is_array($orders)) {
+			foreach ($orders as $order) {
+				if ($order instanceof WC_Order) {
+					$last_attempt = (int) $order->get_meta('_unified_last_sync_attempt');
+					if ($last_attempt > 0 && (time() - $last_attempt) < 180) {
+						continue;
+					}
+					$order->update_meta_data('_unified_last_sync_attempt', time());
+					$order->save();
+					$result = $this->sync_single_order_status($order);
+					if ($result) {
+						$synced[$order->get_id()] = $result;
+					}
+				}
+			}
+		}
+		if (!empty($synced)) {
+			Unified_Payment_Gateway_Logger::info(
+				'Pending orders sync completed.',
+				['source' => 'unified-payment-gateway', 'synced' => $synced]
+			);
+		}
+		return $synced;
+	}
+	
+	/**
+	 * Sync a single Unified order status with the remote payment API.
+	 *
+	 * @param WC_Order|int $order Order instance or order ID.
+	 * @return string|null Resolved state ('success', 'failed', 'cancelled', 'expired') or null.
+	 */
+	public function sync_single_order_status($order)
+	{
+		if (is_numeric($order)) {
+			$order = wc_get_order(absint($order));
+		}
+		if (!$order instanceof WC_Order) {
+			return null;
+		}
+		if ($order->get_payment_method() !== 'unified') {
+			return null;
+		}
+		if ($order->has_status(['processing', 'completed']) || $order->get_meta('_unified_state') === 'success') {
+			return 'success';
+		}
+		$order_id = $order->get_id();
+		$pay_id   = sanitize_text_field((string) $order->get_meta('_unified_pay_id'));
+		$accounts_data = get_option('woocommerce_unified_payment_gateway_accounts', []);
+		if (is_string($accounts_data)) {
+			$accounts_data = maybe_unserialize($accounts_data);
+		}
+		if (empty($accounts_data)) {
+			$general_settings = get_option('woocommerce_unified_settings', []);
+			if (!empty($general_settings['accounts'])) {
+				$accounts_data = maybe_unserialize($general_settings['accounts']);
+			}
+		}
+		if (isset($accounts_data['live_public_key']) || isset($accounts_data['sandbox_public_key'])) {
+			$accounts_data = [$accounts_data];
+		}
+		$settings   = get_option('woocommerce_unified_settings', []);
+		$is_sandbox = isset($settings['sandbox']) && $settings['sandbox'] === 'yes';
+		$public_key = '';
+		$secret_key = '';
+		if (!empty($accounts_data) && is_array($accounts_data)) {
+			$first_account = reset($accounts_data);
+			if (is_array($first_account)) {
+				$public_key = $is_sandbox ? ($first_account['sandbox_public_key'] ?? '') : ($first_account['live_public_key'] ?? '');
+				$secret_key = $is_sandbox ? ($first_account['sandbox_secret_key'] ?? '') : ($first_account['live_secret_key'] ?? '');
+			}
+		}
+		if (empty($public_key)) {
+			return null;
+		}
+		if (empty($pay_id)) {
+			$purchase_url = (string) $order->get_meta('_unified_voucher_purchase_url');
+			if (empty($purchase_url)) {
+				$reference = (string) $order->get_meta('_unified_voucher_reference');
+				if (!empty($reference) && !empty($secret_key)) {
+					$payload = [
+						'first_name'        => $order->get_billing_first_name(),
+						'last_name'         => $order->get_billing_last_name(),
+						'email'             => $order->get_billing_email(),
+						'amount'            => number_format((float) $order->get_total(), 2, '.', ''),
+						'api_secret'        => $secret_key,
+						'curr_code'         => $order->get_currency(),
+						'reference'         => $reference,
+						'is_sandbox'        => $is_sandbox,
+						'meta_data'         => [
+							'order_id' => $order->get_id(),
+							'amount'   => number_format((float) $order->get_total(), 2, '.', ''),
+							'source'   => 'woocommerce',
+						],
+					];
+					$v_res = wp_remote_post($this->get_api_url('/api/voucher/send'), [
+						'method'  => 'POST',
+						'headers' => [
+							'Content-Type'  => 'application/json',
+							'Authorization' => 'Bearer ' . $public_key,
+						],
+						'body'    => wp_json_encode($payload),
+						'timeout' => 8,
+					]);
+					if (!is_wp_error($v_res) && wp_remote_retrieve_response_code($v_res) === 200) {
+						$v_data = json_decode(wp_remote_retrieve_body($v_res), true);
+						if (!empty($v_data['data']['purchase_url'])) {
+							$purchase_url = esc_url_raw($v_data['data']['purchase_url']);
+							$order->update_meta_data('_unified_voucher_purchase_url', $purchase_url);
+							$order->save();
+						}
+					}
+				}
+			}
+			if (!empty($purchase_url)) {
+				$pay_id = $this->resolve_pay_id_from_purchase_url($purchase_url);
+				if (!empty($pay_id)) {
+					$order->update_meta_data('_unified_pay_id', $pay_id);
+					$order->save();
+				}
+			}
+		}
+		$status_data = null;
+		if (!empty($pay_id)) {
+			$check_res = wp_remote_post($this->get_api_url('/api/check-payment-status'), [
+				'headers' => [
+					'Content-Type' => 'application/json',
+					'Accept'       => 'application/json',
+				],
+				'body'    => wp_json_encode(['uuid' => $pay_id]),
+				'timeout' => 8,
+			]);
+			if (!is_wp_error($check_res) && wp_remote_retrieve_response_code($check_res) === 200) {
+				$status_data = json_decode(wp_remote_retrieve_body($check_res), true);
+			}
+		}
+		if (!$status_data || empty($status_data['status'])) {
+			$txn_res = wp_remote_post($this->get_api_url('/api/update-txn-status'), [
+				'headers' => [
+					'Content-Type'  => 'application/json',
+					'Accept'        => 'application/json',
+					'Authorization' => 'Bearer ' . $public_key,
+				],
+				'body'    => wp_json_encode([
+					'order_id'      => $order_id,
+					'payment_token' => $pay_id,
+				]),
+				'timeout' => 8,
+			]);
+			if (!is_wp_error($txn_res) && wp_remote_retrieve_response_code($txn_res) === 200) {
+				$temp_data = json_decode(wp_remote_retrieve_body($txn_res), true);
+				if (is_array($temp_data) && !empty($temp_data['status'])) {
+					// If redirect_url is returned, ensure it belongs to this order
+					if (!empty($temp_data['redirect_url'])) {
+						$order_key = $order->get_order_key();
+						if (strpos($temp_data['redirect_url'], $order_key) !== false || empty($pay_id)) {
+							$status_data = $temp_data;
+						}
+					} else {
+						$status_data = $temp_data;
+					}
+				}
+			}
+		}
+		if (!is_array($status_data)) {
+			return null;
+		}
+		$raw_status = is_array($status_data) ? ($status_data['transaction_status'] ?? $status_data['payment_status'] ?? $status_data['status'] ?? null) : null;
+		$status_lower = $raw_status ? strtolower((string) $raw_status) : '';
+		$is_paid = in_array($status_lower, ['success', 'paid', 'completed'], true);
+
+		// If not paid with current pay_id, re-check using purchase_url in case reference changed (e.g. 446-1 -> 446-2)
+		if (!$is_paid) {
+			$purchase_url = (string) $order->get_meta('_unified_voucher_purchase_url');
+			if (!empty($purchase_url)) {
+				$resolved_pay_id = $this->resolve_pay_id_from_purchase_url($purchase_url);
+				if (!empty($resolved_pay_id) && $resolved_pay_id !== $pay_id) {
+					$alt_res = wp_remote_post($this->get_api_url('/api/check-payment-status'), [
+						'headers' => [
+							'Content-Type' => 'application/json',
+							'Accept'       => 'application/json',
+						],
+						'body'    => wp_json_encode(['uuid' => $resolved_pay_id]),
+						'timeout' => 8,
+					]);
+					if (!is_wp_error($alt_res) && wp_remote_retrieve_response_code($alt_res) === 200) {
+						$alt_data = json_decode(wp_remote_retrieve_body($alt_res), true);
+						$alt_raw  = is_array($alt_data) ? ($alt_data['transaction_status'] ?? $alt_data['payment_status'] ?? $alt_data['status'] ?? null) : null;
+						if ($alt_raw && in_array(strtolower((string) $alt_raw), ['success', 'paid', 'completed'], true)) {
+							$pay_id = $resolved_pay_id;
+							$order->update_meta_data('_unified_pay_id', $pay_id);
+							$order->save();
+							$is_paid = true;
+							$status_lower = 'success';
+						}
+					}
+				}
+			}
+		}
+		if (!$is_paid && empty($status_lower)) {
+			return null;
+		}
+		if ($is_paid) {
+			Unified_Payment_State_Engine::handle_event(
+				$order_id,
+				'api_sync',
+				[
+					'status'        => 'success',
+					'payment_token' => $pay_id,
+					'source'        => 'API Sync',
+				]
+			);
+			if (!empty($pay_id)) {
+				wp_remote_post($this->get_api_url('/api/payment/sync-status'), [
+					'headers' => [
+						'Content-Type' => 'application/json',
+						'Accept'       => 'application/json',
+					],
+					'body'    => wp_json_encode([
+						'pay_id'          => $pay_id,
+						'wp_order_status' => $order->get_status(),
+						'synced_via'      => 'plugin_sync',
+					]),
+					'timeout' => 5,
+				]);
+			}
+			return 'success';
+		} elseif (in_array($status_lower, ['failed', 'cancelled', 'canceled', 'expired'], true)) {
+			Unified_Payment_State_Engine::handle_event(
+				$order_id,
+				'api_sync',
+				[
+					'status'        => $status_lower,
+					'payment_token' => $pay_id,
+					'source'        => 'API Sync',
+				]
+			);
+			return $status_lower;
+		}
+		return null;
+	}
+	
+	/**
+	 * Extract pay_id from voucher purchase redirect URL.
+	 *
+	 * @param string $purchase_url Signed voucher redemption URL.
+	 * @return string|null Base64-encoded pay_id or null.
+	 */
+	public function resolve_pay_id_from_purchase_url($purchase_url)
+	{
+		if (empty($purchase_url)) {
+			return null;
+		}
+		$resp = wp_remote_get($purchase_url, [
+			'redirection' => 5,
+			'timeout'     => 8,
+		]);
+		if (is_wp_error($resp)) {
+			return null;
+		}
+		$target_url = '';
+		$http_response = $resp['http_response'] ?? null;
+		if ($http_response && is_object($http_response)) {
+			$raw_obj = $http_response->get_response_object();
+			if (is_object($raw_obj)) {
+				$target_url = (string) $raw_obj->url;
+				if (empty($target_url) && !empty($raw_obj->history)) {
+					$last = end($raw_obj->history);
+					$target_url = (string) ($last->headers['location'] ?? '');
+				}
+			}
+		}
+		if (empty($target_url)) {
+			$target_url = (string) wp_remote_retrieve_header($resp, 'location');
+		}
+		if (empty($target_url)) {
+			return null;
+		}
+		if (preg_match('#/p/t/([a-zA-Z0-9_\-]+)#', $target_url, $m)) {
+			$token = $m[1];
+			return (strlen($token) > 10) ? substr($token, 0, 5) . substr($token, 10) : $token;
+		} elseif (preg_match('#/p/i/([a-zA-Z0-9_\-]+)#', $target_url, $m)) {
+			return $m[1];
+		}
+		return null;
+	}
+	
+	/**
+	 * Auto-sync order status when viewing an order in WooCommerce Admin.
+	 *
+	 * @param WC_Order $order
+	 */
+	public function unified_admin_order_sync_on_view($order)
+	{
+		if (!$order instanceof WC_Order || $order->get_payment_method() !== 'unified') {
+			return;
+		}
+		if (!$order->has_status(['pending', 'on-hold'])) {
+			return;
+		}
+		$last_sync = (int) $order->get_meta('_unified_last_admin_sync');
+		if (time() - $last_sync < 15) {
+			return;
+		}
+		$order->update_meta_data('_unified_last_admin_sync', time());
+		$order->save();
+		$this->sync_single_order_status($order);
+	}
+	
+	/**
+	 * Add custom order action in WooCommerce order edit screen.
+	 *
+	 * @param array $actions
+	 * @return array
+	 */
+	public function unified_add_order_actions($actions)
+	{
+		global $theorder;
+		if ($theorder instanceof WC_Order && $theorder->get_payment_method() === 'unified') {
+			$actions['unified_check_status'] = __('Check Unified payment status', 'unified-payment-gateway');
+		}
+		return $actions;
+	}
+	
+	/**
+	 * Handle manual status check action from order screen.
+	 *
+	 * @param WC_Order $order
+	 */
+	public function unified_process_order_action_check_status($order)
+	{
+		if ($order instanceof WC_Order && $order->get_payment_method() === 'unified') {
+			$result = $this->sync_single_order_status($order);
+			if ($result === 'success') {
+				$order->add_order_note(__('Manual status check: Payment confirmed successfully.', 'unified-payment-gateway'));
+			} elseif ($result) {
+				$order->add_order_note(sprintf(__('Manual status check: Status is %s.', 'unified-payment-gateway'), $result));
+			} else {
+				$order->add_order_note(__('Manual status check: No status update available.', 'unified-payment-gateway'));
+			}
+		}
+	}
+
+	/**
+	 * Auto-sync pending orders when admin views the Orders screen.
+	 *
+	 * @param WP_Screen|null $screen
+	 */
+	public function unified_admin_orders_screen_sync($screen)
+	{
+		if (!is_admin() || empty($screen)) {
+			return;
+		}
+		if (in_array($screen->id, ['shop_order', 'woocommerce_page_wc-orders', 'edit-shop_order'], true)) {
+			$last_screen_sync = (int) get_transient('unified_last_orders_screen_sync');
+			if (time() - $last_screen_sync >= 15) {
+				set_transient('unified_last_orders_screen_sync', time(), 60);
+				$this->sync_pending_orders(5);
+			}
+		}
+	}
+
+	/**
+	 * Auto-sync a pending order row when rendered in HPOS orders table.
+	 *
+	 * @param string $column
+	 * @param WC_Order $order
+	 */
+	public function unified_admin_order_row_sync($column, $order)
+	{
+		if ($column !== 'order_status' && $column !== 'order_number') {
+			return;
+		}
+		if (!$order instanceof WC_Order || $order->get_payment_method() !== 'unified') {
+			return;
+		}
+		if (!$order->has_status(['pending', 'on-hold'])) {
+			return;
+		}
+		$last_sync = (int) $order->get_meta('_unified_last_row_sync');
+		if (time() - $last_sync < 20) {
+			return;
+		}
+		$order->update_meta_data('_unified_last_row_sync', time());
+		$order->save();
+		$this->sync_single_order_status($order);
+	}
+
+	/**
+	 * Auto-sync a pending order row when rendered in Classic posts orders table.
+	 *
+	 * @param string $column
+	 * @param int $post_id
+	 */
+	public function unified_admin_order_row_sync_posts($column, $post_id)
+	{
+		if ($column !== 'order_status' && $column !== 'order_number') {
+			return;
+		}
+		$order = wc_get_order($post_id);
+		if ($order) {
+			$this->unified_admin_order_row_sync($column, $order);
+		}
+	}
+
+	/**
+	 * Auto-sync when customer visits the order confirmation or account view order page.
+	 *
+	 * @param int $order_id
+	 */
+	public function unified_customer_order_sync($order_id)
+	{
+		$order = wc_get_order($order_id);
+		if ($order instanceof WC_Order && $order->get_payment_method() === 'unified' && $order->has_status(['pending', 'on-hold'])) {
+			$this->sync_single_order_status($order);
+		}
 	}
 }
